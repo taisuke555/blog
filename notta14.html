@@ -51,9 +51,9 @@
     <script>
         // ========== 設定 ==========
         const CONFIG = {
-            notionUrl: "https://www.notion.so/2bfa5e7d8f6181cc9042c2c921a8896a",  // NotionのURL
-            expireDate: "2025-12-07",  // 公開期限（この日の23:59まで有効）
-            title: "視聴者目線の重要性",  // コンテンツタイトル
+            notionUrl: "https://www.notion.so/2bfa5e7d8f6181cc9042c2c921a8896a",
+            expireDate: "2025-12-07",
+            title: "視聴者目線の重要性",
         };
         // ==========================
 
@@ -63,7 +63,6 @@
             const diff = expire - now;
 
             if (diff > 0) {
-                // 期限内 → リダイレクト
                 const days = Math.floor(diff / (1000 * 60 * 60 * 24));
                 const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
                 
@@ -76,12 +75,10 @@
                     </div>
                 `;
                 
-                // 2秒後にリダイレクト
                 setTimeout(() => {
                     window.location.href = CONFIG.notionUrl;
                 }, 2000);
             } else {
-                // 期限切れ
                 document.getElementById("content").innerHTML = `
                     <div class="expired">
                         <div class="icon">🔒</div>
