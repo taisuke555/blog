@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>限定公開コンテンツ | 井上</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 500px;
+            text-align: center;
+            padding: 40px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .icon { font-size: 60px; margin-bottom: 20px; }
+        h1 { font-size: 24px; margin-bottom: 15px; font-weight: 600; }
+        p { color: #a0a0a0; line-height: 1.8; margin-bottom: 20px; }
+        .expired h1 { color: #ff6b6b; }
+        .loading { color: #4dabf7; }
+        .countdown {
+            background: rgba(255,255,255,0.1);
+            padding: 15px 25px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        .countdown strong { color: #ffd43b; font-size: 18px; }
+    </style>
+</head>
+<body>
+    <div class="container" id="content">
+        <div class="loading">
+            <div class="icon">⏳</div>
+            <h1>読み込み中...</h1>
+        </div>
+    </div>
+
+    <script>
+        // ========== 設定 ==========
+        const CONFIG = {
+            notionUrl: "https://www.notion.so/2bfa5e7d8f6181cc9042c2c921a8896a",  // NotionのURL
+            expireDate: "2024-12-07",  // 公開期限（この日の23:59まで有効）
+            title: "視聴者目線の重要性",  // コンテンツタイトル
+        };
+        // ==========================
+
+        window.onload = function() {
+            const now = new Date();
+            const expire = new Date(CONFIG.expireDate + "T23:59:59");
+            const diff = expire - now;
+
+            if (diff > 0) {
+                // 期限内 → リダイレクト
+                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                
+                document.getElementById("content").innerHTML = `
+                    <div class="icon">🔓</div>
+                    <h1>${CONFIG.title}</h1>
+                    <p>限定公開コンテンツにアクセスしています...</p>
+                    <div class="countdown">
+                        公開終了まで: <strong>${days}日 ${hours}時間</strong>
+                    </div>
+                `;
+                
+                // 2秒後にリダイレクト
+                setTimeout(() => {
+                    window.location.href = CONFIG.notionUrl;
+                }, 2000);
+            } else {
+                // 期限切れ
+                document.getElementById("content").innerHTML = `
+                    <div class="expired">
+                        <div class="icon">🔒</div>
+                        <h1>公開期限が終了しました</h1>
+                        <p>このコンテンツは期間限定での公開でした。<br>
+                        ご覧いただきありがとうございました。</p>
+                        <p style="margin-top: 30px; font-size: 14px;">
+                            次回の限定公開をお楽しみに！
+                        </p>
+                    </div>
+                `;
+            }
+        };
+    </script>
+</body>
+</html>
