@@ -7,9 +7,11 @@
 ナレッジは knowledge/ フォルダの md をそのまま注入する（クライアントPC内で完結）。
 """
 import json
+import unicodedata
 from pathlib import Path
 
-from prompts import COMMON_RULES, WRITE_RULES, wrap_untrusted, _cross_for_writer, _blueprint_for_writer
+from prompts import (COMMON_RULES, WRITE_RULES, wrap_untrusted, _cross_for_writer, _blueprint_for_writer,
+                     H_WRITE_TARGET, H_POLISH_TARGET)
 
 BASE = Path(__file__).resolve().parent
 KNOWLEDGE_DIR = BASE / "knowledge"
@@ -37,10 +39,29 @@ def _j(obj):
     return json.dumps(obj, ensure_ascii=False, indent=1)
 
 
+def knowledge_path(fname):
+    """knowledge/ のファイルを、ファイル名の正規化（NFC/NFD）の違いを無視して探す。
+    macOS で作った zip はファイル名が NFD（例：「レビュー」「仕上げ」「レシピ」の濁点・半濁点が分離）になり、
+    Windows/Linux では NFC で書かれたこの表の名前と一致せず、無言で空文字が注入されていた。"""
+    if not fname:
+        return None
+    direct = KNOWLEDGE_DIR / fname
+    if direct.exists():
+        return direct
+    want = unicodedata.normalize("NFC", fname)
+    try:
+        for p in KNOWLEDGE_DIR.iterdir():
+            if unicodedata.normalize("NFC", p.name) == want:
+                return p
+    except OSError:
+        return None
+    return None
+
+
 def knowledge(key, limit=None):
     """knowledge/ の md を読む。無ければ空文字（ツールは動き続ける）。"""
-    path = KNOWLEDGE_DIR / KNOWLEDGE_FILES.get(key, "")
-    if not path.exists():
+    path = knowledge_path(KNOWLEDGE_FILES.get(key, ""))
+    if not path:
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")
     return text[:limit] if limit else text
@@ -49,9 +70,9 @@ def knowledge(key, limit=None):
 def list_knowledge():
     out = []
     for key, fname in KNOWLEDGE_FILES.items():
-        p = KNOWLEDGE_DIR / fname
-        out.append({"key": key, "file": fname, "exists": p.exists(),
-                    "chars": len(p.read_text(encoding="utf-8", errors="replace")) if p.exists() else 0})
+        p = knowledge_path(fname)
+        out.append({"key": key, "file": fname, "exists": bool(p),
+                    "chars": len(p.read_text(encoding="utf-8", errors="replace")) if p else 0})
     return out
 
 
@@ -468,44 +489,8 @@ def house_style_checklist(rules):
 
 
 # ---------------------------------------------------------------
-# 検品結果 → 修正指示
+# 検品結果 → 修正指示（組み立ては app.revise_targets。修正リストの項目をそのまま指示にする）
 # ---------------------------------------------------------------
-
-def build_fix_instruction(audit_result, hook_result=None, jev_result=None, house_rules=None, tone_result=None):
-    """落ちた項目だけを修正指示に組む。3点セット（どこを／何を参考に／何を材料に）。"""
-    lines = ["検品で不合格になった項目だけを直してください。合格している箇所は変えないでください。", ""]
-    n = 0
-    for a in (audit_result or {}).get("audit", []):
-        if "×" in str(a.get("result", "")):
-            n += 1
-            lines.append(f"{n}. 【{a.get('item', '')}】")
-            lines.append(f"   どこを：{a.get('where', '')}「{a.get('quote', '')}」")
-            lines.append(f"   何が問題か：{a.get('why', '')}")
-    for f in (audit_result or {}).get("fatal", []):
-        n += 1
-        lines.append(f"{n}. 【重大】{f}")
-    if hook_result and _num(hook_result.get("score")) < 70:
-        n += 1
-        lines.append(f"{n}. 【冒頭30秒】採点{hook_result.get('score')}点。次の改善案を反映：")
-        for fx in hook_result.get("fixes", []):
-            lines.append(f"   ・{fx}")
-        for p in hook_result.get("problems", []):
-            lines.append(f"   問題：{p.get('pattern', '')}「{p.get('quote', '')}」")
-    for m in (tone_result or {}).get("mismatches", []):
-        n += 1
-        lines.append(f"{n}. 【口調・語彙のズレ：{m.get('kind', '')}】{m.get('where', '')}「{m.get('quote', '')}」")
-        lines.append(f"   参考台本の声：「{m.get('reference', '')}」／直し方：{m.get('fix', '')}（表現のコピーはしない）")
-    for j in (jev_result or []):
-        if j.get("verdict") in ("×", "要修正"):
-            n += 1
-            lines.append(f"{n}. 【外部採点：{j.get('label', '')}】値{j.get('value')}（合格ライン未満）。{j.get('hint', '')}")
-    if n == 0:
-        return ""
-    if house_rules:
-        lines += ["", "# このチャンネルの固有ルール（添削から学習済み。必ず守る）"]
-        for r in house_rules:
-            lines.append("- " + (r.get("rule") if isinstance(r, dict) else str(r)))
-    return "\n".join(lines)
 
 
 def _num(v):
@@ -560,17 +545,19 @@ def p23_learn_rules(diff_json, character_json, existing_rules_json):
 # ---------------------------------------------------------------
 
 WRITE_BLOCKS_SCHEMA = {
-    "script_blocks": [{"name": "ブロック名（設計図と一字一句同じ）", "text": "本文（話し言葉そのまま）"}],
+    "script_blocks": [{"name": "ブロック名（設計図と一字一句同じ）", "text": "本文（話し言葉そのまま）",
+                       "recap": "このブロックで出した主張・使った具体例と数字・予告した約束・頼んだ動作を120字以内で（後のブロックが重複と回収漏れを避けるための要点）"}],
     "assumptions": ["このブロック群で採った判断（無ければ空配列・各1行）"],
     "kakunin": ["素材に無く書けなかった事実の一覧（[要確認：〜]は本文に書かず、ここに書く）"],
 }
 
 
 def p29_write_blocks(cross_json, blueprint_json, concept_json, target_blocks_json, written_so_far,
-                     covered_names, remaining_names, voice_samples, materials="", first=False, last=False):
+                     covered_names, remaining_names, voice_samples, materials="", first=False, last=False, focus=None):
     mat = (f"\n# 提供素材（あなたの裏取り資料。視聴者に読み上げる原稿ではない。"
            f"注意書き・出典表記・検証メモを本文へ持ち込まないこと）\n{materials}\n") if materials else ""
-    prev = (f"\n# ここまでに書いた本文（全文。重複・矛盾を避けるために読む。書き直さない・出力しない）\n{written_so_far}\n"
+    prev = (f"\n# 直前までの本文（末尾。話をつなげ、重複・矛盾を避けるために読む。書き直さない・出力しない。"
+            f"それより前は「これまでに語った内容」の要点で把握する）\n{written_so_far}\n"
             if written_so_far else "")
     pos = "台本の冒頭部分" if first else ("台本の締め部分" if last else "台本の途中")
     return f"""#PHASE:write-blocks
@@ -583,13 +570,15 @@ def p29_write_blocks(cross_json, blueprint_json, concept_json, target_blocks_jso
 - 各ブロックの name は設計図と一字一句同じにする。
 - 各ブロックの文字数は設計図の目安±20%に**必ず**合わせる。今回の分だけに集中し、削って短くしない。
 - 直前の本文と自然につなげる（同じ話を繰り返さない、直前で予告したものを受ける）。
-- 「これまでに語った内容」にある話題を、新情報なしに繰り返さない。
+- 「これまでに語った内容」（各ブロックの要点＝出した主張・具体例・数字・予告・頼んだ動作）にある話題を、新情報なしに繰り返さない。
+  冒頭で約束したこと・前のブロックで予告したことは、該当する位置で回収する。
+- 各ブロックの recap に、そのブロックで出した主張・具体例と数字・予告・頼んだ動作を120字以内で書く（後のブロックを書くときの手がかりになる）。
 - 「この後に来るブロック」の内容を先取りして書かない（予告の一文は可）。
 - [要確認：〜]や（推定）のマーカーは本文に書かない。書けない事実は kakunin に書き、本文では触れない。
-- 参考台本は全文を読み、リズム（一文の長さの緩急・間の取り方）、話題の転換のしかた、CTAの温度を写す。
-  ただし文の使い回し（連続20文字以上の一致）は禁止。写すのは「言い方の型」であって「文」ではない。
+- 参考台本の抜粋（今回書く位置に対応する部分）を読み、リズム（一文の長さの緩急・間の取り方）、話題の転換のしかた、
+  CTAの温度を写す。ただし文の使い回し（連続20文字以上の一致）は禁止。写すのは「言い方の型」であって「文」ではない。
 {mat}
-# 参考台本（声・リズム・話題の転換・CTAの温度の参照。表現のコピーは禁止＝連続20文字以上の一致NG）
+# 参考台本の抜粋（声・リズム・話題の転換・CTAの温度の参照。表現のコピーは禁止＝連続20文字以上の一致NG）
 {voice_samples}
 
 # 出力スキーマ
@@ -598,19 +587,19 @@ def p29_write_blocks(cross_json, blueprint_json, concept_json, target_blocks_jso
 # 横断分析（型）
 {_cross_for_writer(cross_json)}
 
-# 設計図（全体の骨組み。今回書くのは★の部分だけ）
-{_blueprint_for_writer(blueprint_json)}
+# 設計図（全体の骨組み。今回書くのは★の部分だけ。対象と前後は中身つき、他は要点のみ）
+{_blueprint_for_writer(blueprint_json, focus)}
 
 # 作りたい台本の構想（コンセプト・キャラ・世界設定・固有ルールを含む）
 {concept_json}
 
-# これまでに語った内容（ブロック名と要点）
+# これまでに語った内容（ブロック名と要点：出した主張・具体例と数字・予告・頼んだ動作）
 {covered_names or "（まだ無い。これが最初のブロック）"}
 
 # この後に来るブロック（書かない）
 {remaining_names or "（これが最後）"}
 {prev}
-# ★今回書くブロック（これだけを書いて返す）
+{H_WRITE_TARGET}
 {target_blocks_json}
 """
 
@@ -668,8 +657,8 @@ POLISH_SCHEMA = {
 
 
 def p24_polish(script_json, character_json, house_rules_json, context=""):
-    ctx = ("\n# 前後の文脈（読むだけ。出力しない・直さない。主語や対象を補うときの参照に使う）\n" + context + "\n"
-           if context else "")
+    ctx = ("\n# 前後の文脈（読むだけ。出力しない・直さない。前の塊の末尾・次の塊の冒頭・全ブロック名。主語や対象を補うときの参照に使う）\n"
+           + context + "\n" if context else "")
     return f"""#PHASE:polish
 あなたは日本語台本の推敲者です。内容・構成・事実・キャラクターの声を一切変えずに、
 「耳で聞いて一度で意味が取れる日本語」へ整え、指定スキーマのJSONだけを返してください。
@@ -722,7 +711,7 @@ def p24_polish(script_json, character_json, house_rules_json, context=""):
 # 出力スキーマ
 {_j(POLISH_SCHEMA)}
 {ctx}
-# 推敲する台本（このブロックだけを直して返す）
+{H_POLISH_TARGET}
 {script_json}
 """
 
@@ -741,7 +730,7 @@ TONE_SCHEMA = {
 }
 
 
-def p25_tone_check(script_json, ref_excerpts, cross_style_json, character_json):
+def p25_tone_check(script_json, ref_excerpts, cross_style_json, character_json, partial_note=""):
     return f"""#PHASE:tone
 あなたは台本の「声」を照合する検品官です。新作台本を参考台本の抜粋と比べ、口調・言葉のニュアンス・
 ジャンル特有の言い回しのズレを洗い出し、指定スキーマのJSONだけを返してください。
@@ -753,7 +742,7 @@ def p25_tone_check(script_json, ref_excerpts, cross_style_json, character_json):
 - 参考台本の**表現をそのままコピーさせる指示は禁止**（型は真似る・表現は真似ない）。fix は「言い方の方向」を示す。
 - キャラクター設定が参考台本と意図的に違う点（設定書にある）はズレとして扱わない。
 - ズレが無ければ mismatches を空配列にし、score を高くする。無理に見つけない。
-
+{partial_note}
 # 横断分析が記録した話者の特徴（人称・文末・口癖・定型句）
 {cross_style_json}
 
@@ -783,7 +772,8 @@ def channel_pack(karte):
     if karte.get("concept_sheet"):
         pack["channel_concept"] = karte["concept_sheet"]
     if karte.get("character_sheet"):
-        pack["character"] = karte["character_sheet"]
+        # 外見8項目と画像生成用の固定文は台本の執筆・検品に使わないので渡さない（カルテには残る）
+        pack["character"] = {kk: v for kk, v in karte["character_sheet"].items() if kk not in ("appearance", "fixed_string")}
     if karte.get("world_sheet"):
         pack["world"] = karte["world_sheet"]
     rules = karte.get("house_style") or []
@@ -815,17 +805,22 @@ def mock_response_ext(prompt):
         return json.dumps({"score": 72, "grade": "B", "structure": "モック", "u4": [{"item": "具体性", "score": 3, "why": "モック"}], "problems": [], "fixes": ["数字を冒頭に"], "retention_forecast": "モック"}, ensure_ascii=False)
     if "#PHASE:write-blocks" in prompt:
         try:
-            tj = json.loads(prompt.split("# ★今回書くブロック（これだけを書いて返す）\n", 1)[1])
+            tj = json.loads(prompt.split(H_WRITE_TARGET + "\n", 1)[1])
         except Exception:
             tj = []
-        return json.dumps({"script_blocks": [{"name": b.get("name"), "text": f"（モック本文：{b.get('name')}）こんにちは。今日も「老後のお金の教科書」を開いていきましょう。" * 2} for b in tj],
+
+        def _fill(b):
+            n = int(_num(b.get("chars")) or 300)
+            sent = f"（モック本文：{b.get('name')}）結論から言います。固定費を見直すと毎月の不安が一つ減ります。"
+            return (sent * (n // len(sent) + 1))[:n]
+        return json.dumps({"script_blocks": [{"name": b.get("name"), "text": _fill(b), "recap": f"（モック要点：{b.get('name')}で固定費の話をした）"} for b in tj],
                            "assumptions": [], "kakunin": []}, ensure_ascii=False)
     if "#PHASE:apply-rules" in prompt:
         tgt = prompt.split("# ルールを当てる範囲（この全文を返す）\n", 1)[1]
         return json.dumps({"text": tgt.replace("ということです。", "です。", 1), "changes": [{"before": "ということです。", "after": "です。", "rule": "モック"}]}, ensure_ascii=False)
     if "#PHASE:polish" in prompt:
         try:
-            src = json.loads(prompt.split("# 台本\n", 1)[1])
+            src = json.loads(prompt.split(H_POLISH_TARGET + "\n", 1)[1])
             blocks = src.get("script_blocks", [])
         except Exception:
             blocks = []

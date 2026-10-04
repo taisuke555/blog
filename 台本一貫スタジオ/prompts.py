@@ -11,24 +11,55 @@ def _j(obj):
     return json.dumps(obj, ensure_ascii=False, indent=1)
 
 
-def _blueprint_for_writer(value):
-    """表示時だけ中身と制約を分離する。保存済み設計図は変更しない。"""
+# プロンプトの見出し（モック・ベンチ・check_inputs が同じ文字列で区切るため、ここだけで定義する）
+H_WRITE_TARGET = "# ★今回書くブロック（これだけを書いて返す）"
+H_FIX_TARGET = "# ★直す対象のブロック（これだけを書き直して返す）"
+H_POLISH_TARGET = "# 推敲する台本（このブロックだけを直して返す）"
+H_AUDIT_SCRIPT = "# 検品対象の台本"
+
+
+def _blueprint_for_writer(value, focus=None):
+    """表示時だけ中身と制約を分離する。保存済み設計図は変更しない。
+    focus（ブロック名の集合）を渡すと、それ以外のブロックは「語る中身」を先頭60字の要点に縮め、
+    書き方の制約を落とす（今回触らないブロックの中身まで毎回全文で渡さないため。骨組みは全ブロック残す）。"""
     try:
         bp = json.loads(value) if isinstance(value, str) else value
     except (ValueError, TypeError):
         return value  # 旧来の自由文入力もそのまま渡す
     if not isinstance(bp, dict):
         return value
-    out = dict(bp)
+    # 調査依頼文・質問・不足一覧・設計メモは設計者向けの情報で、執筆の仕様ではないので渡さない
+    out = {k: v for k, v in bp.items() if k not in ("gaps", "research_prompt", "user_questions", "notes", "bp_audit", "blocks")}
     out["blocks"] = []
     for b in bp.get("blocks") or []:
+        if not isinstance(b, dict):
+            continue
         block = {k: v for k, v in b.items() if k not in ("content", "constraints")}
+        if focus is not None and b.get("name") not in focus:
+            c = str(b.get("content", "") or "")
+            block["語る中身（要点）"] = c[:120] + ("…" if len(c) > 120 else "")
+            out["blocks"].append(block)
+            continue
         block["語る中身"] = b.get("content", "")
         block["書き方の制約"] = b.get("constraints") or []
         if "constraints" not in b:
             block["旧形式の読み方"] = "語る中身には指示も混在する。括弧の外の指示を台詞にしない。"
         out["blocks"].append(block)
-    return _j(out)
+    return json.dumps(out, ensure_ascii=False)
+
+
+def blueprint_min(value):
+    """検品官に渡す設計図＝構成・字数・語る中身・制約（検品に要る）。調査依頼文・質問・不足一覧・メモ・前回検品は落とす。"""
+    try:
+        bp = json.loads(value) if isinstance(value, str) else value
+    except (ValueError, TypeError):
+        return value
+    if not isinstance(bp, dict):
+        return value
+    out = {k: v for k, v in bp.items() if k in ("title", "total_chars", "minutes", "emotion_curve")}
+    out["blocks"] = [{k: v for k, v in b.items() if k in ("no", "name", "purpose", "content", "chars", "emotion", "kata", "constraints")}
+                     for b in (bp.get("blocks") or []) if isinstance(b, dict)]
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _cross_for_writer(value):
@@ -51,7 +82,7 @@ def _cross_for_writer(value):
             out["kata"].append({"item": kata.get("item", ""),
                                 "rule": " / ".join(applications) or kata.get("rule", ""),
                                 "strength": kata.get("strength", "")})
-    return _j(out)
+    return json.dumps(out, ensure_ascii=False)
 
 
 COMMON_RULES = """
@@ -271,8 +302,8 @@ def p4_blueprint(cross_json, concept_json, revise=""):
 # 出力スキーマ
 {_j(P4_SCHEMA)}
 
-# 横断分析（型／自由度）
-{cross_json}
+# 横断分析（型／自由度。逐語根拠は照合専用なので外してある）
+{_cross_for_writer(cross_json)}
 
 # 作りたい台本の構想
 {concept_json}
@@ -423,6 +454,20 @@ WRITE_RULES = """
   （「理由は3つあります」「5ステップです」は正しい）。
 """ + SOURCE_RULE + POLISH_RULES
 
+WRITE_RULES_CORE = """
+# 執筆ルールの核（必ず守る）
+- 提供素材にない数字・実績・体験談・固有名詞を創作しない。書けない事実は本文で触れず kakunin に書く。[要確認：〜]（推定）を本文に書かない。
+- 出典名・調査名の読み上げ、訂正の実況、制作過程への言及（メタ発言）を本文に出さない。断り書きは1本で多くても1回。
+- 参考台本の文をそのまま・少し変えて使わない（連続20文字以上の一致NG）。写すのは言い方の型であって文ではない。
+- 同じ主旨の文・同じまとめ文句を他のブロックと重複させない。字数を増やすときは言い換えでなく、具体例・手順の分解・反論への一言で埋める。
+- 各ブロックの name は設計図と一字一句同じ。番号の接頭辞を足さない。
+- 「語る中身」は事実・論点・必要な台詞、「書き方の制約」は執筆指示。制約を台詞にしない。個数制限を「3つお伝えします」のような予告に変換しない。
+- 話者本人の実績・経歴は個数を予告せず番号で並べない（理由・方法・事例など論の列挙の個数予告は型どおりで良い）。
+- 専門語・自作用語は初出のブロックで一言で定義してから使う。CTA・締めは視聴者の実際の動作の動詞で書く。
+- 抽象名詞を主語にした翻訳調（期待が乗る・構造が立つ）や、この話題と無関係な業界の借用メタファーを書かない。人を主語にして言う。
+"""
+
+
 def p5_write(cross_json, blueprint_json, concept_json, scripts_text, materials=""):
     mat = (f"\n# 提供素材（あなたの裏取り資料。視聴者に読み上げる原稿ではない。"
            f"注意書き・出典表記・検証メモを本文へ持ち込まないこと）\n{materials}\n") if materials else ""
@@ -516,10 +561,10 @@ def p6_partial(blueprint_json, targets_json, context_json, instruction,
 # 設計図（全体の骨組み・字数の約束）
 {_blueprint_for_writer(blueprint_json)}
 
-# ★直す対象のブロック（これだけを書き直して返す）
+{H_FIX_TARGET}
 {targets_json}
 
-# 前後の文脈（読むだけ。**書き直さない・出力しない**）
+# 前後の文脈（読むだけ。**書き直さない・出力しない**。隣接ブロックの末尾／冒頭と、全ブロックの要点）
 {context_json}
 """
 
@@ -539,6 +584,81 @@ kenpin の該当行を「× → 修正済」に更新してください。
 # 現在の台本
 {current_json}
 """
+
+P7P_SCHEMA = {
+    "script_blocks": [{"name": "ブロック名（渡されたものと一字一句同じ）", "text": "表現を書き直した後のそのブロックの全文"}],
+}
+
+
+def p7_fixcopy_partial(targets_json, hits_json, context_json=""):
+    """コピー修正の部分版。一致を含むブロックだけを渡し、そのブロックだけを返させる。
+    （旧 p7_fixcopy は台本全文を再生成していた＝数か所の一致のために全ブロックが書き換わり、
+    合格済みの箇所まで変わる上に出力トークンが台本1本分かかっていた）"""
+    ctx = f"\n# 前後の文脈（読むだけ。書き直さない・出力しない）\n{context_json}\n" if context_json else ""
+    return f"""#PHASE:fixcopy-partial
+機械コピーチェックで、参考台本との連続20文字以上の一致（定型句を除く）が見つかりました。
+一致を含むブロックだけを渡します。該当箇所の**表現だけ**を書き直し（構成・内容・文字数感・キャラの声は維持）、
+指定スキーマのJSONだけを返してください。渡されていないブロックは現状のまま保持されます。
+{COMMON_RULES}
+- 出力するのは渡されたブロックだけ。name は一字一句そのまま返す。
+- 一致した文字列が本文に残らないように言い回しを変える。同じ意味を別の言葉で言う（内容・数字は変えない）。
+- 書き直した文の前後が不自然につながらないよう、そのブロック内で整える。
+
+# 一致箇所（この文字列が本文に残らないように書き直す）
+{hits_json}
+
+# 出力スキーマ（渡されたブロックだけを入れる）
+{_j(P7P_SCHEMA)}
+{ctx}
+{H_FIX_TARGET}
+{targets_json}
+"""
+
+
+P31_SCHEMA = {
+    "script_blocks": [{"name": "ブロック名（渡されたものと一字一句同じ）", "text": "字数を合わせた後のそのブロックの全文"}],
+}
+
+
+def p31_adjust_length(block_rows_json, targets_json, prev_tail="", speech_json="{}", house_rules_json="[]",
+                      materials="", next_head="", voice=""):
+    """字数調整・単独生成の軽量プロンプト。執筆プロンプト（型・設計図全体・構想・参考台本を含む）を丸ごと再実行せず、
+    対象ブロックの本文と目安字数、設計図の該当行、前後のつながり、キャラの話し方、固有ルール、執筆ルールの核で直す。
+    不足を埋める（増やす）ときだけ提供素材を渡す（素材なしで「新しい情報で埋めろ」は捏造の温床になる）。
+    本文が空のブロック（執筆で返ってこなかったもの）は設計図の該当行から新規に書かせる。"""
+    prev = f"\n# 直前のブロックの末尾（つながりの参照。書き直さない・出力しない）\n{prev_tail}\n" if prev_tail else ""
+    nxt = f"\n# 直後のブロックの冒頭（先取りしない・書き直さない・出力しない）\n{next_head}\n" if next_head else ""
+    mat = (f"\n# 提供素材（不足を埋めるときの裏取り資料。視聴者に読み上げる原稿ではない。注意書き・出典表記を本文へ持ち込まない。"
+           f"ここに無い数字・事例は書かない）\n{materials}\n") if materials else ""
+    vc = f"\n# このチャンネルの声（口癖・文末・一文の長さ・CTAの温度）\n{voice}\n" if voice else ""
+    return f"""#PHASE:adjust-length
+あなたはYouTube台本のライターです。書いたブロックの字数が設計図の目安から外れました（または本文が返ってこなかったブロックがあります）。
+**内容・事実・構成・キャラの声は変えず**、目安字数±15%に収まるようにそのブロックだけを書き直して、指定スキーマのJSONだけを返してください。
+{COMMON_RULES}
+{WRITE_RULES_CORE}
+# 字数調整の規律
+- 超過なら、言い換えの重複・前置き・まとめ直しを削る。新しい話題は足さない。
+- 不足なら、既出内容の言い換えや水増しではなく、具体例・手順の分解・反論への一言で埋める。提供素材が無い場合は、素材の要る数字・事例を足さずに、既出の論点の分解で埋める。
+- text が空のブロックは、設計図の該当行の「語る中身」「書き方の制約」から新規に書く（目安字数に合わせる）。
+- 対象ブロックの target_chars が目安字数、current_chars が今の字数。
+- 直前のブロックからの流れ（受けている予告・話題）を切らず、直後のブロックの中身を先取りしない。
+{mat}{vc}
+# 設計図の該当行（目安字数・語る中身・書き方の制約）
+{block_rows_json}
+
+# キャラクターの話し方（一人称・文末・口癖）
+{speech_json}
+
+# このチャンネルの固有ルール（守る）
+{house_rules_json}
+
+# 出力スキーマ
+{_j(P31_SCHEMA)}
+{prev}{nxt}
+{H_FIX_TARGET}
+{targets_json}
+"""
+
 
 # ---------------------------------------------------------------
 # Phase 8-10: パートナー分業パイプライン（ハブv2）
@@ -853,6 +973,8 @@ COMMON_RUBRIC = [
     "理由・方法・失敗・第三者の事例を数える個数予告は型どおりなので○。"
     "逆に「理由は2つ」と呼びながら中身が本人の実績そのものなら×。"
     "引用の中（相談者の発言・避けるべき例として挙げた文）は対象外で○",
+    "設計図の各ブロックの『語る中身（content）』と『書き方の制約（constraints）』が本文に反映されているか"
+    "（落ちている要素・守られていない制約があれば×。where にその設計図のブロック名を書く）",
 ]
 
 
@@ -883,7 +1005,7 @@ def p13_audit(checklist_json, script_json, blueprint_min_json, materials=""):
 # 出力スキーマ
 {_j(P13_SCHEMA)}
 
-# 検品対象の台本
+{H_AUDIT_SCRIPT}
 {script_json}
 """
 
@@ -1025,9 +1147,43 @@ _MOCK_AUDIT = {"audit": [{"item": "モック検品項目", "result": "○", "quo
                           "where": "全体", "why": "モック応答のため常に合格"}], "fatal": []}
 
 
+def _mock_targets(prompt):
+    """モック用：「★直す対象のブロック」見出しの後ろのJSON配列を取り出す。"""
+    for marker in (H_FIX_TARGET + "\n",):
+        if marker in prompt:
+            rest = prompt.split(marker, 1)[1]
+            for cand in (rest, rest.split("\n\n# ", 1)[0]):
+                try:
+                    v = json.loads(cand)
+                    return v if isinstance(v, list) else []
+                except ValueError:
+                    continue
+    return []
+
+
+def mock_audit_with_ng(prompt, n):
+    """モック用：検品官が先頭 n ブロックに逐語引用つきの不合格を返す（部分修正の経路を画面テストで踏むため）。"""
+    try:
+        script = json.loads(prompt.split(H_AUDIT_SCRIPT + "\n", 1)[1])
+        blocks = [b for b in script.get("script_blocks", []) if b.get("text")]
+    except Exception:
+        blocks = []
+    rows = []
+    for b in blocks[:max(0, int(n))]:
+        rows.append({"item": f"モック検品：「{b.get('name')}」の言い回し", "result": "×", "quote": b["text"][5:45],
+                     "where": b.get("name"), "why": "モック：画面テスト用の不合格"})
+    if blocks:
+        rows.append({"item": "モック検品項目", "result": "○", "quote": blocks[0]["text"][:40], "where": blocks[0].get("name"), "why": "モック"})
+    return json.dumps({"audit": rows, "fatal": []}, ensure_ascii=False)
+
+
 def mock_response(prompt):
     import time as _t
     _t.sleep(0.8)
+    if "#PHASE:revise-partial" in prompt or "#PHASE:fixcopy-partial" in prompt or "#PHASE:adjust-length" in prompt:
+        tj = _mock_targets(prompt)
+        return json.dumps({"script_blocks": [{"name": b.get("name"), "text": (b.get("text") or "（モック本文）") + "（モック修正）"}
+                                             for b in tj if isinstance(b, dict)]}, ensure_ascii=False)
     if "#PHASE:issue_map" in prompt:
         return json.dumps(_MOCK_P4A, ensure_ascii=False)
     if "#PHASE:research_pack" in prompt:

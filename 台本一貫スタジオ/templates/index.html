@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>台本一貫スタジオ</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <header>
@@ -218,6 +218,7 @@
     <h2>STEP 5｜執筆結果と自動検品</h2>
     <div class="guide">この画面の順番：<b>⑮</b> 台本を読む → 修正リストで項目ごとに「AIに直させる／自分で直す／無視」を選ぶ → 「選んだ項目をAI修正」（該当ブロックだけ書き直し・再検品まで自動）→ <b>⑯</b> 添削へ（「自分で直す」にした項目は付箋として渡ります）</div>
     <div id="audit-summary" class="banner"></div>
+    <div id="usage-box" class="hint"></div>
     <div class="panel">
       <div class="script-head">
         <h3 id="s-title"></h3>
@@ -246,7 +247,7 @@
       <h3>🛠 修正リスト（不合格になった項目）<span id="fix-count" class="badge"></span></h3>
       <p class="hint">各項目で選べます：<b>AIに直させる</b>＝該当ブロックだけ書き直して再検品／<b>自分で直す</b>＝STEP 6 の添削画面に付箋として渡す／<b>無視</b>＝以降の検品から外す（いつでも戻せます）。一言メモを足すとAIへの指示になります。</p>
       <div id="fix-list"></div>
-      <label class="lbl">その他の修正（自由記述・任意。書くと全体の書き直しになります）<input type="text" id="s-revise" placeholder="例：全体をもう少し柔らかい語り口に"></label>
+      <label class="lbl">その他の修正（自由記述・任意。「ブロック名：指示」の形ならそのブロックだけ直します。それ以外の書き方は全体の書き直しになります）<input type="text" id="s-revise" placeholder="例：まとめ：もう少し短く　／　全体をもう少し柔らかい語り口に（←全体書き直し）"></label>
       <div id="fix-changes"></div>
       <div class="actions">
         <span>
@@ -301,8 +302,14 @@
     <h3>⚙ 設定</h3>
     <label class="lbl">エンジン<select id="set-engine"><option value="claude">Claude Code（本番）</option><option value="mock">モック（画面テスト）</option></select></label>
     <label class="lbl">モデル（空欄＝Claude Code の既定。例：claude-fable-5-1 / claude-opus-5 / claude-sonnet-5）<input type="text" id="set-model" placeholder="空欄で既定"></label>
-    <label class="lbl">執筆に渡す参考台本<select id="set-ref"><option value="full">全文を渡す（推奨。リズム・転換・CTAの温度を写す）</option><option value="excerpt">冒頭と中盤の抜粋だけ（軽量）</option></select></label>
-    <label class="lbl">執筆の方式<select id="set-write"><option value="blocks">ブロック単位で順に書く（推奨）</option><option value="whole">全文を一度に書く（旧方式）</option></select></label>
+    <h4 style="margin:14px 0 4px">トークン予算（AI利用枠の節約）</h4>
+    <p class="hint">設計図・キャラ・固有ルール・素材は毎回全文で渡します。参考台本や既に書いた本文などの「参照」は予算内の抜粋にし、変わっていないブロックは再検品・再推敲しません。上限を超えそうなときは参考台本・直前の本文・文体見本から順に縮めます。「全文」は参考台本の渡し方だけを旧方式に戻します（全文の書き直しや全塊の再推敲は戻りません）。消費は STEP 5 の結果とホームに表示されます。</p>
+    <label class="lbl">執筆に渡す参考台本<select id="set-ref"><option value="budget">予算内の抜粋（推奨。冒頭には参考台本の冒頭、締めには締めを渡す）</option><option value="full">全文を渡す（旧方式・高コスト）</option><option value="excerpt">冒頭と中盤の抜粋だけ（最軽量）</option></select></label>
+    <div class="form-row">
+      <label class="lbl">参考台本の合計（千字）<input type="number" id="set-refk" min="2" max="60" step="1"></label>
+      <label class="lbl">1回の入力上限（千字）<input type="number" id="set-capk" min="10" max="200" step="1"></label>
+    </div>
+    <label class="lbl">執筆の方式<select id="set-write"><option value="blocks">ブロック単位で順に書く（推奨）</option><option value="whole">全文を一度に書く（旧方式。参考台本は抜粋）</option></select></label>
     <label class="lbl">自動検品の修正回数（上限）<input type="number" id="set-rounds" min="0" max="4"></label>
     <label class="lbl"><input type="checkbox" id="set-tone"> 参考台本と口調・語彙を照合する（ジャンル特有の言い回しのズレを検品）</label>
     <label class="lbl"><input type="checkbox" id="set-polish"> 検品合格後に日本語推敲を自動で行う</label>
@@ -322,6 +329,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

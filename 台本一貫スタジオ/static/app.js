@@ -41,6 +41,7 @@ async function runJob(startPath, body, label) {
       if (j.status === "running") { $("overlay-text").textContent = j.progress || "処理中…"; continue; }
       overlay(false);
       if (j.status === "error") throw new Error(j.error);
+      window.LAST_USAGE = j.usage || null;
       return j.result;
     }
   } catch (e) {
@@ -51,6 +52,8 @@ async function runJob(startPath, body, label) {
 }
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtTok = (n) => { n = Number(n) || 0; return n >= 10000 ? `約${(n / 10000).toFixed(1)}万` : n >= 1000 ? `約${(n / 1000).toFixed(1)}千` : String(n); };
+const usageLine = (u) => u && u.calls ? `AI利用：呼び出し${u.calls}回／入力${fmtTok(u.in_tokens)}トークン／出力${fmtTok(u.out_tokens)}トークン` : "";
 const SUB_LABELS = { who: "誰", pain: "痛み", wish: "欲しい結果", first_person: "一人称", second_person: "視聴者の呼び方", ending: "文末", phrases: "口癖", rhythm: "リズム", face: "顔型", eyebrow: "眉", eyes: "目", hair: "髪型", body: "体型", top: "上衣", prop: "小道具", color: "主色" };
 const val = (v) => Array.isArray(v) ? `<ul>${v.map((x) => `<li>${esc(typeof x === "object" ? JSON.stringify(x) : x)}</li>`).join("")}</ul>`
   : (v && typeof v === "object") ? Object.entries(v).map(([k, x]) => `<div><b>${esc(SUB_LABELS[k] || k)}</b>：${esc(Array.isArray(x) ? x.join("／") : x)}</div>`).join("")
@@ -99,7 +102,8 @@ async function loadHome() {
   STATE.projects.forEach((p) => {
     const d = document.createElement("div");
     d.className = "item";
-    d.innerHTML = `<div><b>${esc(p.name)}</b><div class="meta">${esc(p.created)}・台本${p.scripts}本・STEP${p.step}${p.karte ? "・📒" + esc(p.karte) : ""}</div></div><span>開く →</span>`;
+    const u = p.usage && p.usage.calls ? `・${usageLine(p.usage).replace("AI利用：", "")}` : "";
+    d.innerHTML = `<div><b>${esc(p.name)}</b><div class="meta">${esc(p.created)}・台本${p.scripts}本・STEP${p.step}${p.karte ? "・📒" + esc(p.karte) : ""}${esc(u)}</div></div><span>開く →</span>`;
     d.onclick = () => openProject(p.id);
     pl.appendChild(d);
   });
@@ -135,7 +139,7 @@ async function openProject(pid) {
   if (PROJECT.concept) fillConcept(PROJECT.concept);
   if (PROJECT.blueprint) renderBlueprint(PROJECT.blueprint);
   if (PROJECT.materials) $("materials").value = PROJECT.materials;
-  if (PROJECT.script) renderResult({ script: PROJECT.script, audit: PROJECT.audit, audit_log: PROJECT.audit_log, polish: PROJECT.polish });
+  if (PROJECT.script) renderResult({ script: PROJECT.script, audit: PROJECT.audit, audit_log: PROJECT.audit_log, polish: PROJECT.polish, usage: (PROJECT.token_usage || []).slice(-1)[0] });
   if (PROJECT.intent && !(PROJECT.concept && PROJECT.concept.theme)) $("c-theme").value = PROJECT.intent;
   const st = PROJECT.step || 1;
   const k = PROJECT.karte || {};
@@ -546,14 +550,29 @@ function applyResult(result) {
   PROJECT.polish = result.polish;
   PROJECT.original_script_text = scriptFullText(result.script);
   PROJECT.review = null;
-  renderResult(result);
+  renderResult({ ...result, usage: result.usage || window.LAST_USAGE });
+}
+
+function renderUsage(u) {
+  const box = $("usage-box");
+  if (!box) return;
+  if (!u || !u.calls) { box.innerHTML = ""; return; }
+  const mode = u.measured === u.calls ? "実測" : u.measured ? "一部推定" : "推定";
+  const phases = Object.entries(u.by_phase || {}).sort((a, b) => b[1].in_tokens - a[1].in_tokens).slice(0, 6)
+    .map(([k, v]) => `${esc(k)} ${v.calls}回・入力${fmtTok(v.in_tokens)}`).join("／");
+  const cache = u.cache_tokens ? `（うちキャッシュ読み${fmtTok(u.cache_tokens)}）` : "";
+  const cost = u.cost_usd ? `／参考見積 $${Number(u.cost_usd).toFixed(2)}（CLI算出。定額プランでは請求されません）` : "";
+  const warns = (u.warnings || []).map((w) => `<div class="hint">⚠ ${esc(w)}</div>`).join("");
+  const total = PROJECT && PROJECT.usage_total && PROJECT.usage_total.calls ? `<div class="hint">このプロジェクトの累計：呼び出し${PROJECT.usage_total.calls}回／入力${fmtTok(PROJECT.usage_total.in_tokens)}／出力${fmtTok(PROJECT.usage_total.out_tokens)}</div>` : "";
+  box.innerHTML = `🧮 今回の${esc(usageLine(u))}${cache}${esc(cost)}（${mode}。Claude Code 自体のシステムプロンプト分を含む）${phases ? `<div class="hint">${phases}</div>` : ""}${warns}${total}`;
 }
 
 function renderPolish(p) {
   const box = $("polish-box");
   if (!p) { box.innerHTML = '<p class="hint">未実施（設定で自動推敲を切っているか、まだ執筆していません）</p>'; return; }
   const ch = p.changes || [];
-  box.innerHTML = (ch.length ? `<p class="hint">${ch.length}か所を直しました${p.note ? "／" + esc(p.note) : ""}</p>` : `<p class="hint">直す箇所はありませんでした${p.note ? "／" + esc(p.note) : ""}</p>`) +
+  const scope = (p.blocks || []).length ? `（今回の対象：${p.blocks.length}ブロック）` : "";
+  box.innerHTML = (ch.length ? `<p class="hint">${ch.length}か所を直しました${scope}${p.note ? "／" + esc(p.note) : ""}</p>` : `<p class="hint">直す箇所はありませんでした${scope}${p.note ? "／" + esc(p.note) : ""}</p>`) +
     ch.map((c) => `<div class="rule"><span class="cat">${esc(c.reason)}</span><div><span class="hint">${esc(c.where)}</span><div class="ex">「${esc(c.before)}」→「${esc(c.after)}」</div></div></div>`).join("");
 }
 
@@ -562,7 +581,7 @@ function renderTone(t) {
   if (!t) { box.innerHTML = '<p class="hint">未実施（設定で口調照合を切っているか、参考台本がありません）</p>'; return; }
   const ms = t.mismatches || [];
   const sc = Number(t.score) || 0;
-  box.innerHTML = `<div class="hook-score ${sc < 70 ? "low" : ""}">${sc}点</div><p>${esc(t.summary || "")}</p>` +
+  box.innerHTML = `<div class="hook-score ${sc < 70 ? "low" : ""}">${sc}点</div><p>${esc(t.summary || "")}${t.partial ? `<span class="hint">（変更ブロックのみ再照合：${esc((t.checked_blocks || []).join("／"))}。点数と言い回しは前回のもの）</span>` : ""}</p>` +
     ((t.genre_lexicon || []).length ? `<p class="hint">ジャンル特有の言い回し：${t.genre_lexicon.map(esc).join("／")}</p>` : "") +
     (ms.length ? ms.map((m) => `<div class="rule"><span class="cat">${esc(m.kind)}</span><div><span class="hint">${esc(m.where)}</span>「${esc(m.quote)}」<div class="ex">参考台本の声：「${esc(m.reference)}」／${esc(m.fix)}</div></div></div>`).join("") : '<p class="hint">ズレはありませんでした</p>');
 }
@@ -607,8 +626,9 @@ function renderChanges(changes) {
     changes.map((c) => `<h4>${esc(c.name)}</h4><div class="diff">${c.diff.filter((d) => d.type !== 0 || d.text.trim()).map((d) => `<div class="l ${d.type < 0 ? "del" : d.type > 0 ? "ins" : "eq"}">${d.type < 0 ? "−" : d.type > 0 ? "＋" : "　"} ${esc(d.text)}</div>`).join("")}</div>`).join("") + "</details>";
 }
 
-function renderResult({ script: s, audit, audit_log, polish, changes }) {
+function renderResult({ script: s, audit, audit_log, polish, changes, usage }) {
   renderPolish(polish);
+  renderUsage(usage);
   renderFixList((audit || {}).fix_items);
   renderChanges(changes);
   renderTone((audit || {}).tone);
@@ -656,6 +676,7 @@ async function onRevise() {
   const result = await runJob(`/api/project/${PROJECT.id}/revise_selected`, { decisions, extra }, `選んだ${nAi}件を修正中…`);
   $("s-revise").value = "";
   applyResult(result);
+  if (result.note) toast("ℹ " + result.note, 7000);
 }
 
 async function saveDecisions() {
@@ -772,7 +793,9 @@ function openSettings() {
   $("set-rounds").value = s.audit_rounds ?? 2;
   $("set-model").value = s.model || "";
   $("set-write").value = s.write_mode || "blocks";
-  $("set-ref").value = s.ref_mode || "full";
+  $("set-ref").value = s.ref_mode || "budget";
+  $("set-refk").value = Math.round((s.ref_budget_chars || 6000) / 1000);
+  $("set-capk").value = Math.round((s.input_cap_chars || 28000) / 1000);
   $("set-jev").checked = !!(s.jev && s.jev.enabled);
   $("set-polish").checked = s.auto_polish !== false;
   $("set-tone").checked = s.tone_check !== false;
@@ -781,7 +804,7 @@ function openSettings() {
 }
 
 async function saveSettings() {
-  await api("/api/settings", { method: "POST", body: { engine: $("set-engine").value, model: $("set-model").value.trim(), write_mode: $("set-write").value, ref_mode: $("set-ref").value, audit_rounds: Number($("set-rounds").value), auto_polish: $("set-polish").checked, tone_check: $("set-tone").checked, jev: { enabled: $("set-jev").checked } } });
+  await api("/api/settings", { method: "POST", body: { engine: $("set-engine").value, model: $("set-model").value.trim(), write_mode: $("set-write").value, ref_mode: $("set-ref").value, ref_budget_chars: Math.max(2, Number($("set-refk").value) || 6) * 1000, input_cap_chars: Math.max(10, Number($("set-capk").value) || 28) * 1000, audit_rounds: Number($("set-rounds").value), auto_polish: $("set-polish").checked, tone_check: $("set-tone").checked, jev: { enabled: $("set-jev").checked } } });
   $("settings-modal").classList.add("hidden");
   toast("⚙ 設定を保存しました");
   loadHome();
