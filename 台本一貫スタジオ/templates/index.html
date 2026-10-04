@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台本一貫スタジオ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand" id="brand">🧬 台本一貫スタジオ</div>
+  <div class="header-right">
+    <a class="btn small ghost" href="/start" target="_blank">🔰 はじめに</a>
+    <a class="btn small ghost" href="/guide" target="_blank">📘 使い方</a>
+    <a class="btn small ghost" href="/manual" target="_blank">📖 台本の考え方</a>
+    <a class="btn small ghost" href="/knowledge" target="_blank">📚 同梱ナレッジ</a>
+    <button class="btn small ghost" id="btn-settings">⚙ 設定</button>
+    <span id="engine-badge" class="badge"></span>
+    <button class="btn small ghost" id="btn-ping">接続テスト</button>
+  </div>
+</header>
+
+<!-- ホーム -->
+<section id="view-home" class="view">
+  <div class="hero">
+    <h1>型を抜き、キャラを立て、書いて、検品して、添削から学ぶ。<br>全部このPCの中で回ります。</h1>
+    <p>参考台本 → 型の分析 → チャンネル設計（コンセプト・キャラ） → 企画・調査 → 執筆と自動検品 → あなたの添削 → 学習してカルテへ</p>
+    <button class="btn primary big" id="btn-new">＋ 新しく台本を作る</button>
+  </div>
+  <div class="panel hidden" id="first-run">
+    <h2>🔰 初めての方へ（このパネルは1本目を作ると消えます）</h2>
+    <ol>
+      <li>右上の「接続テスト」を押して「接続OK」と出るか確認する（出なければ Claude Code のインストールとログインを確認）。</li>
+      <li>「＋ 新しく台本を作る」を押し、真似したい台本を3本以上貼る（文字起こしでも可）。作りたいネタがあれば同じ画面の欄に書く。</li>
+      <li>分析が終わったら「⑤ 診断する」→ 質問に答えて「⑥ 提案どおり一括で作る」。</li>
+      <li>設計図の画面で「足りない情報」に実績・価格・実例を貼り、「⑭ この設計図で執筆」。1本目は1時間ほどかかります。</li>
+      <li>できた台本を添削画面で少し直して「⑲ 差分から学習」。2本目から、あなたの書き方に寄っていきます。</li>
+    </ol>
+    <p class="hint">詳しくは右上の「はじめに」「使い方」にあります。困ったら、押したボタンと画面のエラー文を送ってください。</p>
+  </div>
+  <div class="home-cols">
+    <div class="panel">
+      <h2>📁 作りかけ・過去のプロジェクト</h2>
+      <div id="project-list" class="list"></div>
+    </div>
+    <div class="panel">
+      <h2>📒 チャンネルカルテ（育つ記憶）</h2>
+      <p class="hint">型・コンセプト・キャラ・固有ルール・成功台本が1チャンネル1冊に貯まります。2本目からは分析を飛ばして執筆に直行できます。</p>
+      <div id="karte-list" class="list"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ウィザード -->
+<section id="view-wizard" class="view hidden">
+  <nav class="steps" id="stepnav">
+    <div class="step" data-step="1"><span>1</span>参考台本</div>
+    <div class="step" data-step="2"><span>2</span>型の分析</div>
+    <div class="step" data-step="3"><span>3</span>チャンネル設計</div>
+    <div class="step" data-step="4"><span>4</span>企画と設計図</div>
+    <div class="step" data-step="5"><span>5</span>執筆と検品</div>
+    <div class="step" data-step="6"><span>6</span>添削と学習</div>
+    <div class="step" data-step="7"><span>7</span>完了</div>
+  </nav>
+
+  <!-- STEP 1 -->
+  <div class="stage" id="stage-1">
+    <h2>STEP 1｜参考にしたい台本を入れてください（1〜6本）</h2>
+    <div class="guide">この画面の順番：<b>①</b> 台本を貼る（成功例／失敗例を選ぶ）→ <b>②</b> 作りたいネタを書く（任意）→ <b>③</b> 分析を開始</div>
+    <p class="hint">動画の文字起こしでもOK。<b>成功例3本以上</b>で型の精度が上がります。伸びなかった台本は「失敗例」に切り替えると、その構成は型から外されます。</p>
+    <div class="toolbar">
+      <button class="btn" id="btn-add-card">＋ 台本を追加</button>
+      <label class="btn file-btn">📄 ファイルを選ぶ<input type="file" id="file-input" multiple accept=".txt,.md" hidden></label>
+      <span class="folder-box">📂 <input type="text" id="folder-path" placeholder="フォルダのパスを貼り付け（中の .txt / .md を読み込み）">
+      <button class="btn small" id="btn-folder">読み込む</button></span>
+    </div>
+    <div id="script-cards"></div>
+    <div class="panel intent-box">
+      <h3>🎯 作りたいネタ・企画の方向性（任意・先に書くと二度手間が減ります）</h3>
+      <p class="hint">ここに書いた内容は、診断・コンセプト・キャラ・世界設定のすべてに前提として渡り、STEP 4 のテーマ欄にも自動で入ります。まだ決まっていなければ空欄で進めます。</p>
+      <textarea id="intent" rows="3" placeholder="例：退職前3年でやる固定費の見直しを1本目にしたい。将来は年金・住まい・介護のシリーズにしたい"></textarea>
+    </div>
+    <div class="karte-start" id="karte-start-box">
+      <b>📒 カルテ：</b>
+      <select id="karte-select"><option value="">（新しいチャンネルとして分析する）</option></select>
+      <span class="hint">既存カルテを選ぶと分析をスキップして進みます</span>
+    </div>
+    <div class="actions">
+      <button class="btn primary big" id="btn-analyze">③ 分析を開始する</button>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="stage hidden" id="stage-2">
+    <h2>STEP 2｜分析結果 — このチャンネルの「型」</h2>
+    <div class="guide">この画面の順番：<b>④</b> 型を確認（真似たくない行は✔を外す）→ <b>⑤</b> 診断する → <b>⑥</b> 質問に答えて「提案どおり一括で作る」（自分で調整したい場合は「メモ欄に入れる」→ STEP 3 で個別に作る）</div>
+    <div id="mode-banner" class="banner"></div>
+    <div class="panel"><h3>🎯 ターゲット像</h3><p id="cross-target"></p></div>
+    <div class="panel"><h3>🧬 型テーブル（新作でも守るルール）</h3>
+      <p class="hint">✔を外した行は「守らなくていい」扱いになります。</p>
+      <table class="tbl" id="kata-table"></table></div>
+    <div class="panel"><h3>🎨 自由度テーブル（変えていいところ）</h3><table class="tbl" id="jiyudo-table"></table></div>
+    <div class="panel collapsible"><h3>📝 補足メモ・弱い型</h3><ul id="cross-notes"></ul></div>
+    <div class="panel" id="diag-panel">
+      <h3>🩺 診断 — このジャンルで台本を書くために何が要るか</h3>
+      <p class="hint">参考台本から、ジャンル・形式・必要な設計・用意する素材を診断します。こちらで作れるものは提案し、本人しか答えられないことだけ質問します。</p>
+      <button class="btn" id="btn-diagnose">⑤ 診断する</button>
+      <div id="diag-view"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-back-1">← 台本入力に戻る</button>
+      <button class="btn primary big" id="btn-to-3">この型でOK → チャンネル設計へ（⑥を飛ばす場合）</button>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="stage hidden" id="stage-3">
+    <h2>STEP 3｜チャンネル設計 — コンセプト・キャラクター・世界設定</h2>
+    <div class="guide">この画面の順番：<b>⑦</b> コンセプト → <b>⑧</b> キャラクター → <b>⑨</b> 世界設定（一人語りなら省略可）→ 内容を確認し、直したら「手直しを保存」→ <b>⑩</b> 企画へ。⑥で一括作成した場合は確認だけで⑩へ</div>
+    <div class="banner info" id="stage3-banner">ここで作ったものはカルテに保存され、設計図・執筆・検品のすべてに毎回注入されます。2本目以降は確認だけで進めます。</div>
+    <div class="banner" id="stage3-ready" class="hidden">✅ このチャンネルの設計は作成済みです。内容を確認して「企画へ」で進んでください（変更がなければ何もしなくて大丈夫です）。</div>
+    <div class="hint" id="stage3-intent"></div>
+    <div class="two-col">
+      <div class="panel">
+        <h3>🧭 チャンネルコンセプト</h3>
+        <label class="lbl">メモ（商品・目的・売りたいもの・やりたいこと）<textarea id="concept-memo" rows="3" placeholder="例：出口は個別相談。50代で老後資金が不安な会社員向け。節約より固定費の話を柱にしたい"></textarea></label>
+        <button class="btn" id="btn-concept">⑦ コンセプトを設計する</button>
+        <div id="concept-view" class="sheet"></div>
+        <details><summary>JSONを直接編集</summary><textarea id="concept-json" rows="10"></textarea></details>
+      </div>
+      <div class="panel">
+        <h3>🎭 キャラクター設定</h3>
+        <label class="lbl">メモ（実在の人物か、架空か。年齢・口調・外見の希望など）<textarea id="character-memo" rows="3" placeholder="例：元銀行員の50代男性。穏やかだが不安商法には怒る。一人称は私"></textarea></label>
+        <button class="btn" id="btn-character">⑧ キャラクターを設計する</button>
+        <div id="character-view" class="sheet"></div>
+        <details><summary>JSONを直接編集</summary><textarea id="character-json" rows="10"></textarea></details>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>🗺 世界設定 — 時代背景・経緯・登場人物・相関図・プロット</h3>
+      <p class="hint">複数の登場人物が出る台本、物語仕立て、時代背景がある題材で使います。ここに書いた呼び方・関係・出来事の順番・整合点は、そのまま検品項目になります。解説一人語りだけなら省略できます。</p>
+      <label class="lbl">メモ（時代・舞台・登場人物・出来事・その状況になった経緯）<textarea id="world-memo" rows="3" placeholder="例：2026年春、地方都市。主人公は退職3年前の会社員。妻と大学生の息子。父の介護がきっかけで家計を見直すことになった"></textarea></label>
+      <button class="btn" id="btn-world">⑨ 世界設定を作る（任意）</button>
+      <div id="world-view" class="sheet"></div>
+      <details><summary>JSONを直接編集</summary><textarea id="world-json" rows="12"></textarea></details>
+    </div>
+    <div class="panel">
+      <h3>📏 固有ルール（添削から学習したもの）<span id="rules-count" class="badge"></span></h3>
+      <div id="rules-view" class="rules"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-back-2">← 分析結果に戻る</button>
+      <button class="btn" id="btn-channel-save">💾 手直しを保存</button>
+      <button class="btn primary big" id="btn-to-4">⑩ この設計で → 企画へ</button>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="stage hidden" id="stage-4">
+    <h2>STEP 4｜企画と設計図</h2>
+    <div class="guide">この画面の順番：<b>⑪</b> テーマを確認（ネタが入っています。決まらなければ「おまかせ提案」）→ <b>⑫</b> 設計図を作る（自動で検品）→ <b>⑬</b> 足りない情報を調べて貼る → 表を直したければ「設計図を修正」→ <b>⑭</b> 執筆。テーマが設計と合わないときだけ「設計を再考」</div>
+    <div class="banner warn hidden" id="undesigned-banner">⚠ このチャンネルの設計（コンセプト・キャラクター）がまだありません。このまま作ると設計図はネタと型だけで作られます。
+      <button class="btn small" id="btn-go-setup">STEP 2 の診断から一括で作る</button></div>
+    <div class="form">
+      <label>テーマ・題材（必須）<textarea id="c-theme" rows="2" placeholder="例：退職前3年でやる固定費の見直し"></textarea></label>
+      <div class="form-row">
+        <label>ターゲット<input type="text" id="c-target" placeholder="空欄ならコンセプトの層"></label>
+        <label>長さの目安<input type="text" id="c-length" placeholder="空欄なら参考台本と同じ"></label>
+      </div>
+      <label>目的<select id="c-goal">
+        <option value="参考台本と同じ">参考台本と同じ</option>
+        <option value="再生数・チャンネル成長">再生数・チャンネル成長</option>
+        <option value="リスト取り（LINE・メルマガ誘導）">リスト取り（LINE・メルマガ誘導）</option>
+        <option value="教育・ファン化">教育・ファン化</option>
+      </select></label>
+      <label>その他の要望<textarea id="c-memo" rows="2" placeholder="例：事例は女性にしたい、専門用語は使わない など"></textarea></label>
+    </div>
+    <div class="propose-box">
+      <button class="btn" id="btn-propose">💡 テーマが決まらない → おまかせ提案</button>
+      <div id="proposals"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-reconsider" title="コンセプトの柱と世界設定のプロットだけを、このテーマ前提で更新します">🔄 このテーマで設計を再考</button>
+      <button class="btn primary" id="btn-blueprint">⑫ 設計図を作る</button>
+    </div>
+    <p class="hint">「設計を再考」は、テーマがチャンネル設計（柱・プロット）と合わないときだけ。出口・キャラ・相関図はそのまま、柱とプロットだけ更新します。</p>
+
+    <div id="bp-area" class="hidden">
+      <div id="bp-audit-box"></div>
+      <div class="banner info">⏱ 長い台本を書き直すより、この表を直すほうが10倍速いです。</div>
+      <div class="panel">
+        <h3 id="bp-title"></h3>
+        <p id="bp-meta" class="hint"></p>
+        <table class="tbl" id="bp-table"></table>
+      </div>
+      <div class="panel" id="bp-gaps-panel"><h3>❓ 足りない情報と調査</h3>
+        <div id="bp-gaps"></div>
+        <div id="bp-questions"></div>
+        <div id="bp-research"></div>
+        <label class="lbl">調べた結果・補足情報・素材はここに貼り付け（体験談・実例・数字など）<textarea id="materials" rows="5" placeholder="空欄でもOK。ここに貼った内容だけが「事実」として台本に使われます"></textarea></label>
+      </div>
+      <div class="revise-box">
+        <input type="text" id="bp-revise" placeholder="設計図への修正指示（例：実例ブロックを短くして、ポイントを4つに）">
+        <button class="btn" id="btn-bp-revise">設計図を修正</button>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-back-3">← チャンネル設計に戻る</button>
+      <span class="hidden" id="ext-write-box">
+        <button class="btn" id="btn-write-pack" title="Gemini等のブラウザ画面に貼って書かせるための指示文一式を書き出します">⑭′ 外部AI用の執筆パックを書き出す</button>
+      </span>
+      <button class="btn primary big hidden" id="btn-write">⑭ この設計図で執筆 → 自動検品</button>
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div class="stage hidden" id="stage-5">
+    <h2>STEP 5｜執筆結果と自動検品</h2>
+    <div class="guide">この画面の順番：<b>⑮</b> 台本を読む → 修正リストで項目ごとに「AIに直させる／自分で直す／無視」を選ぶ → 「選んだ項目をAI修正」（該当ブロックだけ書き直し・再検品まで自動）→ <b>⑯</b> 添削へ（「自分で直す」にした項目は付箋として渡ります）</div>
+    <div id="audit-summary" class="banner"></div>
+    <div class="panel">
+      <div class="script-head">
+        <h3 id="s-title"></h3>
+        <div><span id="s-chars" class="badge"></span>
+        <button class="btn" id="btn-copy">📋 台本をコピー</button></div>
+      </div>
+      <div id="s-blocks" class="script-body"></div>
+    </div>
+    <div class="two-col">
+      <div class="panel"><h3>✅ 検品官の判定（型・キャラ・固有ルール）</h3><table class="tbl" id="audit-table"></table>
+        <div id="fatal-box"></div><div id="copycheck-result"></div></div>
+      <div class="panel"><h3>🎣 冒頭30秒レビュー</h3><div id="hook-box"></div>
+        <div id="jev-box"></div></div>
+    </div>
+    <div class="two-col">
+      <div class="panel"><h3>🗣 口調・語彙の照合（参考台本との声のズレ）</h3><div id="tone-box"></div></div>
+      <div class="panel"><h3>✍️ 日本語推敲（意味を変えずに直した箇所）</h3><div id="polish-box"></div></div>
+    </div>
+    <div class="panel" id="import-panel">
+      <h3>📥 外部AIの出力を取り込む（執筆パックで Gemini 等に書かせた場合）</h3>
+      <p class="hint">「■ブロック名」の行の下に本文、の形式で全ブロックを貼ってください（JSONでも可）。取り込むと Claude Code で書いた場合と同じ検品・修正の輪・推敲が走ります。</p>
+      <textarea id="import-text" rows="6" placeholder="■フック&#10;本文…&#10;&#10;■本編予告&#10;本文…"></textarea>
+      <div class="actions"><button class="btn primary" id="btn-import">📥 取り込んで検品する</button></div>
+    </div>
+    <div class="panel" id="fix-panel">
+      <h3>🛠 修正リスト（不合格になった項目）<span id="fix-count" class="badge"></span></h3>
+      <p class="hint">各項目で選べます：<b>AIに直させる</b>＝該当ブロックだけ書き直して再検品／<b>自分で直す</b>＝STEP 6 の添削画面に付箋として渡す／<b>無視</b>＝以降の検品から外す（いつでも戻せます）。一言メモを足すとAIへの指示になります。</p>
+      <div id="fix-list"></div>
+      <label class="lbl">その他の修正（自由記述・任意。書くと全体の書き直しになります）<input type="text" id="s-revise" placeholder="例：全体をもう少し柔らかい語り口に"></label>
+      <div id="fix-changes"></div>
+      <div class="actions">
+        <span>
+          <button class="btn" id="btn-reaudit">再検品だけ</button>
+          <button class="btn" id="btn-polish">日本語推敲だけ</button>
+        </span>
+        <button class="btn primary" id="btn-s-revise">🛠 選んだ項目をAI修正 → 再検品</button>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-back-4">← 設計図に戻る</button>
+      <button class="btn primary big" id="btn-to-6">⑯ この台本を添削する →</button>
+    </div>
+  </div>
+
+  <!-- STEP 6 -->
+  <div class="stage hidden" id="stage-6">
+    <h2>STEP 6｜添削と学習</h2>
+    <div class="guide">この画面の順番：<b>⑰</b> 右側の冒頭を手直し → <b>⑱</b> 差分を見る → <b>⑲</b> 差分から学習 → <b>⑲′</b> 学習したルールで残りを自動添削（手直し済みはそのまま、それ以降だけ直す。気になれば追加で直して⑲へ戻る）→ <b>⑳</b> 成功台本として保存して完了</div>
+    <div class="banner info">左がAIの初稿、右があなたの手直し。右を直して「差分から学習」を押すと、修正パターンが固有ルールとしてカルテに入り、次回の初稿・修正・検品に自動で効きます。</div>
+    <div class="panel" id="self-fix-panel"><h3>📌 自分で直す項目（STEP 5 の修正リストから）</h3><div id="self-fix-list"></div></div>
+    <div class="two-col">
+      <div class="panel"><h3>AIの初稿（読むだけ）</h3><textarea id="rv-original" rows="22" readonly></textarea></div>
+      <div class="panel"><h3>あなたの手直し（ここを編集）</h3><textarea id="rv-edited" rows="22"></textarea></div>
+    </div>
+    <label class="lbl">添削の意図・次回から守らせたいこと（任意。そのまま固有ルールになります）<input type="text" id="rv-note" placeholder="例：「〜ということです」で締めない／数字は冒頭で1回だけ"></label>
+    <div class="actions">
+      <button class="btn" id="btn-diff">⑱ 差分を見る</button>
+      <button class="btn primary" id="btn-learn">⑲ 差分から学習してカルテへ</button>
+      <button class="btn" id="btn-apply-rules" title="手直し済みの部分はそのまま。それより後ろに固有ルールを当てて自動で添削します">⑲′ 学習したルールで残りを自動添削</button>
+    </div>
+    <div id="apply-view"></div>
+    <div class="panel" id="diff-panel"><h3>差分</h3><div id="diff-view" class="diff"></div></div>
+    <div class="panel" id="learn-panel" class="hidden"><h3>学習したルール</h3><div id="learn-view"></div></div>
+    <div class="actions">
+      <button class="btn" id="btn-back-5">← 執筆結果に戻る</button>
+      <button class="btn primary big" id="btn-finish">⑳ 成功台本としてカルテに保存して完了</button>
+    </div>
+  </div>
+
+  <!-- STEP 7 -->
+  <div class="stage hidden" id="stage-7">
+    <h2>STEP 7｜完了</h2>
+    <div class="panel" id="finish-box"></div>
+    <div class="actions"><button class="btn primary big" id="btn-home">ホームへ</button></div>
+  </div>
+</section>
+
+<!-- 設定 -->
+<div id="settings-modal" class="overlay hidden">
+  <div class="overlay-box left">
+    <h3>⚙ 設定</h3>
+    <label class="lbl">エンジン<select id="set-engine"><option value="claude">Claude Code（本番）</option><option value="mock">モック（画面テスト）</option></select></label>
+    <label class="lbl">モデル（空欄＝Claude Code の既定。例：claude-fable-5-1 / claude-opus-5 / claude-sonnet-5）<input type="text" id="set-model" placeholder="空欄で既定"></label>
+    <label class="lbl">執筆に渡す参考台本<select id="set-ref"><option value="full">全文を渡す（推奨。リズム・転換・CTAの温度を写す）</option><option value="excerpt">冒頭と中盤の抜粋だけ（軽量）</option></select></label>
+    <label class="lbl">執筆の方式<select id="set-write"><option value="blocks">ブロック単位で順に書く（推奨）</option><option value="whole">全文を一度に書く（旧方式）</option></select></label>
+    <label class="lbl">自動検品の修正回数（上限）<input type="number" id="set-rounds" min="0" max="4"></label>
+    <label class="lbl"><input type="checkbox" id="set-tone"> 参考台本と口調・語彙を照合する（ジャンル特有の言い回しのズレを検品）</label>
+    <label class="lbl"><input type="checkbox" id="set-polish"> 検品合格後に日本語推敲を自動で行う</label>
+    <label class="lbl"><input type="checkbox" id="set-jev"> 外部採点（Jev）を使う <span class="hint" id="jev-hint"></span></label>
+    <p class="hint">Jevは任意です。使うには Node と jev フォルダでの npm install、APIキー（~/.config/jev/key.txt）が必要です。無くても検品は動きます。</p>
+    <div class="actions"><button class="btn" id="btn-settings-close">閉じる</button><button class="btn primary" id="btn-settings-save">保存</button></div>
+  </div>
+</div>
+
+<div id="overlay" class="overlay hidden">
+  <div class="overlay-box">
+    <div class="spinner"></div>
+    <div id="overlay-text">処理中…</div>
+    <div class="hint">Claude Codeが裏で動いています。画面はこのままでOKです。</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

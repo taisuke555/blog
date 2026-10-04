@@ -1,0 +1,12 @@
+.manual { max-width: 860px; margin: 24px auto 60px; padding: 30px 24px 100px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.manual h1 { font-size: 26px; border-bottom: 3px solid var(--accent); padding-bottom: 10px; }
+.manual h2 { font-size: 20px; margin-top: 40px; padding: 8px 14px; background: var(--accent-soft); border-left: 5px solid var(--accent); border-radius: 6px; }
+.manual h3 { font-size: 16.5px; margin-top: 26px; color: var(--accent); }
+.manual h4 { font-size: 15px; margin-top: 18px; }
+.manual blockquote { margin: 12px 0; padding: 10px 16px; background: #fbf9f4; border-left: 4px solid #d8d4c8; border-radius: 6px; color: #6b665c; font-size: 14px; }
+.manual table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+.manual th { text-align: left; background: #f4f2ec; padding: 8px 10px; border: 1px solid var(--line); }
+.manual td { padding: 8px 10px; border: 1px solid var(--line); vertical-align: top; }
+.manual pre { background: #f4f2ec; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.manual code { background: #f4f2ec; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.manual hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }

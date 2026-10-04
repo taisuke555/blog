@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+projects/*
+!projects/.keep
+karte/*
+!karte/.keep
+jev/node_modules/

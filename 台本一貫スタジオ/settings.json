@@ -1,0 +1,9 @@
+{
+  "engine": "claude",
+  "timeout_sec": 1800,
+  "audit_rounds": 2,
+  "jev": {
+    "enabled": false,
+    "rubric": "daihon.json"
+  }
+}
