@@ -58,6 +58,14 @@ def main():
         print(("OK  " if cond else "NG  ") + label + (f"  ({detail})" if detail and not cond else ""))
         ok_all = ok_all and bool(cond)
 
+    def _esc(x):
+        return json.dumps(str(x), ensure_ascii=False)[1:-1]  # プロンプト内は JSON エスケープ済み（改行は \\n）
+
+    def _not_full(p, total):
+        """予算に収まらない長さの参考台本が、そのまま全文で入っていないか（抜粋でも末尾は含まれ得るので末尾一致では判定しない）。"""
+        alloc = budget.split_budget(total, [len(r) for r in refs])
+        return not any(r in p for r, n in zip(refs, alloc) if len(r) > n)
+
     def note_sizes(prompts_):
         for p in prompts_:
             ph = budget.phase_of(p)
@@ -80,7 +88,10 @@ def main():
     check("執筆：各呼び出しの入力が上限以内", all(len(p) <= cap for p in writes),
           "最大 %s 字" % format(max(len(p) for p in writes), ","))
     check("執筆：参考台本の抜粋と声カードが入っている", all("◆" in p and ("このチャンネルの声" in p or not k.get("cross")) for p in writes))
-    check("執筆：参考台本を全文では渡していない（予算主義）", all(not all(r[-300:] in p for r in refs) for p in writes) if sum(len(r) for r in refs) > int(SETTINGS.get("ref_budget_chars") or 0) else True)
+    if SETTINGS.get("ref_mode") == "full":
+        print("    （ref_mode=full：参考台本は全文で渡す設定なので抜粋の検査は省略）")
+    else:
+        check("執筆：参考台本を全文では渡していない（予算主義）", all(_not_full(p, int(SETTINGS.get("ref_budget_chars") or 0)) for p in writes))
     targets_ok = True
     for p in writes:
         try:
@@ -89,7 +100,7 @@ def main():
             targets_ok = False
             continue
         for b in tj:
-            if b.get("content") and str(b["content"])[:40] not in p.split(prompts.H_WRITE_TARGET, 1)[0] + p:
+            if b.get("content") and _esc(b["content"])[:40] not in p:
                 targets_ok = False
     check("執筆：対象ブロックの語る中身が全文で入っている", targets_ok)
     check("執筆：素材が全文で入っている", (not materials) or all(materials[-300:] in p for p in writes))
@@ -118,7 +129,7 @@ def main():
     hook_p = next((p for p in captured if p.startswith("#PHASE:hook_review")), "")
     print(f"\n[検品] 検品官 {len(audit_p):,} 字／冒頭レビュー {len(hook_p):,} 字／口調照合 {len(tone_p):,} 字")
     check("検品：入力が上限以内", all(len(p) <= cap for p in captured))
-    check("検品：設計図の各ブロックの語る中身が入っている", all(str(b.get("content", ""))[:30] in audit_p for b in blocks_bp if b.get("content")))
+    check("検品：設計図の各ブロックの語る中身が入っている", all(_esc(b.get("content", ""))[:30] in audit_p for b in blocks_bp if b.get("content")))
     for key in ("character_sheet", "world_sheet"):
         if k.get(key):
             check(f"検品：{sheets[key]}書が入っている", json.dumps(k[key], ensure_ascii=False)[:200] in audit_p)
@@ -129,8 +140,28 @@ def main():
     check("口調照合の入力が参考台本予算の範囲（tone_ref_chars×1.5以内＋台本）", (not tone_p) or len(tone_p) <= int(SETTINGS.get("tone_ref_chars") or 0) * 1.5 + len(json.dumps(script, ensure_ascii=False)) + 6000)
     check("検品：冒頭レビューのナレッジが注入されている（空でない）", bool(hook_p) and bool(ext.knowledge("hook")) and ext.knowledge("hook")[:60] in hook_p,
           "knowledge/04_冒頭30秒レビュー.md が読めていない可能性")
-    if tone_p:
-        check("口調照合：参考台本は抜粋（全文ではない）", not all(r[-300:] in tone_p for r in refs) if sum(len(r) for r in refs) > int(SETTINGS.get("tone_ref_chars") or 0) else True)
+    if tone_p and SETTINGS.get("ref_mode") != "full":
+        check("口調照合：参考台本は抜粋（全文ではない）", _not_full(tone_p, int(SETTINGS.get("tone_ref_chars") or 0)))
+
+    # 2b) 部分修正：直す対象ブロックの設計図（語る中身）が全文で入っているか
+    captured.clear()
+    blocks_s = (script.get("script_blocks") or [])
+    if blocks_s and blocks_s[0].get("text"):
+        b0 = blocks_s[0]
+        item = {"key": "chk", "source": "audit", "label": "検査", "item": "検査項目", "quote": b0["text"][5:45], "where": b0.get("name"),
+                "why": "", "hint": "", "note": "", "decision": "ai"}
+        prj3 = json.loads(json.dumps(prj)); prj3["script"] = json.loads(json.dumps(script))
+        app.save_project = lambda *a: None
+        app.revise_targets("t", prj3, k, [item], extra="")
+        part_p = next((p for p in captured if p.startswith("#PHASE:revise-partial")), "")
+        row = next((b for b in blocks_bp if b.get("name") == b0.get("name")), {})
+        print(f"\n[部分修正] 入力 {len(part_p):,} 字")
+        check("部分修正：直す対象ブロックの語る中身が全文で入っている", bool(part_p) and (not row.get("content") or _esc(row["content"])[:40] in part_p))
+        ctx_n = int(SETTINGS.get("context_chars") or 800)
+        long_others = [b for b in blocks_s[2:] if len(b.get("text", "")) > ctx_n * 2]  # 隣接でなく、文脈の抜粋より長いブロック
+        check("部分修正：離れた長いブロックの本文を全文では渡していない",
+              (not long_others) or not any(_esc(b["text"][:ctx_n + 200]) in part_p for b in long_others))
+        note_sizes(captured)
 
     # 3) 推敲
     captured.clear()

@@ -28,6 +28,9 @@ def _blueprint_for_writer(value, focus=None):
         return value  # 旧来の自由文入力もそのまま渡す
     if not isinstance(bp, dict):
         return value
+    # 既に変換済み（「語る中身」等のキーがある）なら二重変換で中身を消さず、そのまま返す
+    if any(isinstance(b, dict) and ("語る中身" in b or "語る中身（要点）" in b or "書き方の制約" in b) for b in bp.get("blocks") or []):
+        return json.dumps(bp, ensure_ascii=False)
     # 調査依頼文・質問・不足一覧・設計メモは設計者向けの情報で、執筆の仕様ではないので渡さない
     out = {k: v for k, v in bp.items() if k not in ("gaps", "research_prompt", "user_questions", "notes", "bp_audit", "blocks")}
     out["blocks"] = []
@@ -530,7 +533,7 @@ P6P_SCHEMA = {
 
 
 def p6_partial(blueprint_json, targets_json, context_json, instruction,
-               materials="", style_samples="", level_directive=""):
+               materials="", style_samples="", level_directive="", focus=None):
     """部分修正。指摘が出たブロックだけを書き直させる。
     全文（1万字超）を毎回書き直すと、直す必要のない8割まで作り直すことになり、
     クライアントPCのAI利用枠を焼き尽くす（りんさん事故：15ブロック中3つの指摘で
@@ -558,8 +561,8 @@ def p6_partial(blueprint_json, targets_json, context_json, instruction,
 # 出力スキーマ（直す対象のブロックだけを入れる）
 {_j(P6P_SCHEMA)}
 
-# 設計図（全体の骨組み・字数の約束）
-{_blueprint_for_writer(blueprint_json)}
+# 設計図（全体の骨組み・字数の約束。直す対象は語る中身・制約つき、他は要点）
+{_blueprint_for_writer(blueprint_json, focus)}
 
 {H_FIX_TARGET}
 {targets_json}

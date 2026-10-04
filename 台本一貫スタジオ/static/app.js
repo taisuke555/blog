@@ -42,6 +42,7 @@ async function runJob(startPath, body, label) {
       overlay(false);
       if (j.status === "error") throw new Error(j.error);
       window.LAST_USAGE = j.usage || null;
+      if (PROJECT && j.usage_total) PROJECT.usage_total = j.usage_total;
       return j.result;
     }
   } catch (e) {
@@ -139,7 +140,7 @@ async function openProject(pid) {
   if (PROJECT.concept) fillConcept(PROJECT.concept);
   if (PROJECT.blueprint) renderBlueprint(PROJECT.blueprint);
   if (PROJECT.materials) $("materials").value = PROJECT.materials;
-  if (PROJECT.script) renderResult({ script: PROJECT.script, audit: PROJECT.audit, audit_log: PROJECT.audit_log, polish: PROJECT.polish, usage: (PROJECT.token_usage || []).slice(-1)[0] });
+  if (PROJECT.script) renderResult({ script: PROJECT.script, audit: PROJECT.audit, audit_log: PROJECT.audit_log, polish: PROJECT.polish, usage: (PROJECT.token_usage || []).filter((e) => STEP5_JOBS.has(e.job)).slice(-1)[0] });
   if (PROJECT.intent && !(PROJECT.concept && PROJECT.concept.theme)) $("c-theme").value = PROJECT.intent;
   const st = PROJECT.step || 1;
   const k = PROJECT.karte || {};
@@ -553,18 +554,25 @@ function applyResult(result) {
   renderResult({ ...result, usage: result.usage || window.LAST_USAGE });
 }
 
+const JOB_LABEL = { job_write: "執筆", job_import_script: "外部台本の取り込み", job_revise_selected: "AI修正", job_audit_only: "再検品", job_polish: "推敲" };
+const STEP5_JOBS = new Set(Object.keys(JOB_LABEL));
+
 function renderUsage(u) {
   const box = $("usage-box");
   if (!box) return;
   if (!u || !u.calls) { box.innerHTML = ""; return; }
   const mode = u.measured === u.calls ? "実測" : u.measured ? "一部推定" : "推定";
+  const sys = mode === "実測" ? "Claude Code 自体のシステムプロンプト分を含む"
+    : mode === "一部推定" ? "実測できた回だけ Claude Code のシステムプロンプト分を含む"
+    : "プロンプト本文からの概算で、Claude Code 自体のシステムプロンプト分（1回あたり約1.6万トークン）は含まない";
+  const head = u.job ? `${JOB_LABEL[u.job] || u.job}${u.date ? "・" + u.date : ""}の` : "今回の";
   const phases = Object.entries(u.by_phase || {}).sort((a, b) => b[1].in_tokens - a[1].in_tokens).slice(0, 6)
     .map(([k, v]) => `${esc(k)} ${v.calls}回・入力${fmtTok(v.in_tokens)}`).join("／");
   const cache = u.cache_tokens ? `（うちキャッシュ読み${fmtTok(u.cache_tokens)}）` : "";
   const cost = u.cost_usd ? `／参考見積 $${Number(u.cost_usd).toFixed(2)}（CLI算出。定額プランでは請求されません）` : "";
   const warns = (u.warnings || []).map((w) => `<div class="hint">⚠ ${esc(w)}</div>`).join("");
   const total = PROJECT && PROJECT.usage_total && PROJECT.usage_total.calls ? `<div class="hint">このプロジェクトの累計：呼び出し${PROJECT.usage_total.calls}回／入力${fmtTok(PROJECT.usage_total.in_tokens)}／出力${fmtTok(PROJECT.usage_total.out_tokens)}</div>` : "";
-  box.innerHTML = `🧮 今回の${esc(usageLine(u))}${cache}${esc(cost)}（${mode}。Claude Code 自体のシステムプロンプト分を含む）${phases ? `<div class="hint">${phases}</div>` : ""}${warns}${total}`;
+  box.innerHTML = `🧮 ${esc(head)}${esc(usageLine(u))}${cache}${esc(cost)}（${mode}。${sys}）${phases ? `<div class="hint">${phases}</div>` : ""}${warns}${total}`;
 }
 
 function renderPolish(p) {
@@ -795,7 +803,7 @@ function openSettings() {
   $("set-write").value = s.write_mode || "blocks";
   $("set-ref").value = s.ref_mode || "budget";
   $("set-refk").value = Math.round((s.ref_budget_chars || 6000) / 1000);
-  $("set-capk").value = Math.round((s.input_cap_chars || 28000) / 1000);
+  $("set-capk").value = Math.round((s.input_cap_chars || 36000) / 1000);
   $("set-jev").checked = !!(s.jev && s.jev.enabled);
   $("set-polish").checked = s.auto_polish !== false;
   $("set-tone").checked = s.tone_check !== false;
@@ -804,7 +812,7 @@ function openSettings() {
 }
 
 async function saveSettings() {
-  await api("/api/settings", { method: "POST", body: { engine: $("set-engine").value, model: $("set-model").value.trim(), write_mode: $("set-write").value, ref_mode: $("set-ref").value, ref_budget_chars: Math.max(2, Number($("set-refk").value) || 6) * 1000, input_cap_chars: Math.max(10, Number($("set-capk").value) || 28) * 1000, audit_rounds: Number($("set-rounds").value), auto_polish: $("set-polish").checked, tone_check: $("set-tone").checked, jev: { enabled: $("set-jev").checked } } });
+  await api("/api/settings", { method: "POST", body: { engine: $("set-engine").value, model: $("set-model").value.trim(), write_mode: $("set-write").value, ref_mode: $("set-ref").value, ref_budget_chars: Math.max(2, Number($("set-refk").value) || 6) * 1000, input_cap_chars: Math.max(10, Number($("set-capk").value) || 36) * 1000, audit_rounds: Number($("set-rounds").value), auto_polish: $("set-polish").checked, tone_check: $("set-tone").checked, jev: { enabled: $("set-jev").checked } } });
   $("settings-modal").classList.add("hidden");
   toast("⚙ 設定を保存しました");
   loadHome();

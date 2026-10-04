@@ -121,8 +121,10 @@ def run_claude(prompt, force_real=False):
     engine = settings.get("engine", "claude")
     phase = budget.phase_of(prompt)
     meter = budget.current()
-    if meter and len(prompt) > int(settings.get("input_cap_chars") or 0) > 0:
-        meter.note_trim(phase, [{"title": "入力上限超過", "from": len(prompt), "to": len(prompt)}])
+    cap = int(settings.get("input_cap_chars") or 0)
+    if meter and len(prompt) > cap > 0 and not any(w.startswith(f"{phase}：入力") for w in meter.warnings):
+        meter.warn(f"{phase}：入力{len(prompt):,}字が上限{cap:,}字を超えています（設計書・素材・対象の台本など削らない部分だけで超過。"
+                   f"素材を絞るか、設定の「1回の入力上限」を上げてください）")
     if engine == "mock" and not force_real:
         r = None
         n_ng = int(settings.get("mock_audit_ng") or 0)
@@ -485,18 +487,27 @@ def voice_card(prj, karte):
             if x and x not in out:
                 out.append(x)
         return out
+    def _d(x):
+        return x if isinstance(x, dict) else {}
     phrases, sentences, hooks, ctas, endings = [], [], [], [], []
     for a in analyses:
-        sty = a.get("style") or {}
-        phrases += [x for x in (sty.get("phrases") or []) if isinstance(x, str)]
+        sty = _d(a.get("style"))
+        if isinstance(a.get("style"), str) and a["style"].strip():
+            endings.append(a["style"].strip())
+        ph = sty.get("phrases")
+        phrases += [x for x in (ph if isinstance(ph, list) else []) if isinstance(x, str)]
         if sty.get("sentence"):
             sentences.append(str(sty["sentence"]))
         if sty.get("ending"):
             endings.append(str(sty["ending"]))
-        if (a.get("hook") or {}).get("method"):
-            hooks.append(str(a["hook"]["method"]))
-        if (a.get("cta") or {}).get("tone"):
-            ctas.append(str(a["cta"]["tone"]))
+        hk = a.get("hook")
+        hm = hk.get("method") if isinstance(hk, dict) else (hk if isinstance(hk, str) else None)
+        if hm:
+            hooks.append(str(hm))
+        ct = a.get("cta")
+        tn = ct.get("tone") if isinstance(ct, dict) else (ct if isinstance(ct, str) else None)
+        if tn:
+            ctas.append(str(tn))
     if phrases:
         lines.append("口癖・頻出フレーズ：" + "／".join(uniq(phrases)[:12]))
     if endings:
@@ -507,7 +518,7 @@ def voice_card(prj, karte):
         lines.append("冒頭の手法：" + "／".join(uniq(hooks)[:3]))
     if ctas:
         lines.append("CTAの温度・話法：" + "／".join(uniq(ctas)[:3]))
-    sp = (karte.get("character_sheet") or {}).get("speech") or {}
+    sp = _d(_d(karte.get("character_sheet")).get("speech"))
     if sp:
         lines.append("キャラの話し方：" + json.dumps(sp, ensure_ascii=False))
     text = "\n".join("・" + x for x in lines)
@@ -604,8 +615,8 @@ def changed_block_names(before, blocks):
 
 def shrink_to_cap(build, parts, cap):
     """build(dict) でプロンプトを組み、cap 字を超えたら parts（低優先→高優先の順の [名前, 本文, mode, 最低字数]）を
-    順に縮めて組み直す。文字列操作だけなので何度組み直しても AI は呼ばない。
-    仕様（削らない部分）だけで上限を超えるときは、参照を最低字数まで縮めた上で警告を記録する（黙って参照を0にはしない）。
+    順に縮めて組み直す。文字列操作だけなので何度組み直しても AI は呼ばない。抜粋のマーカー分（約16字）を見込んで縮める。
+    仕様（削らない部分）だけで上限を超える場合は参照を最低字数で止め、警告は run_claude 側（全工程が通る地点）で記録する。
     返り値 (prompt, 削った内訳)。"""
     vals = {name: text for name, text, _, _ in parts}
     prompt = build(vals)
@@ -619,18 +630,14 @@ def shrink_to_cap(build, parts, cap):
         room = len(vals[name]) - floor
         if room <= 0:
             continue
-        new_len = len(vals[name]) - min(room, over)
+        cut = min(room, over + 16)
         before = len(vals[name])
-        vals[name] = budget.excerpt(vals[name], new_len, mode)
+        vals[name] = budget.excerpt(vals[name], before - cut, mode)
         trims.append({"title": name, "from": before, "to": len(vals[name])})
         prompt = build(vals)
     m = budget.current()
-    if m:
-        if trims:
-            m.note_trim(budget.phase_of(prompt), trims)
-        if len(prompt) > cap:
-            m.warn(f"{budget.phase_of(prompt)}：入力{len(prompt):,}字が上限{cap:,}字を超えています（設計書・素材など削らない部分だけで超過。"
-                   f"設定の上限を上げるか、素材を絞ってください）")
+    if m and trims:
+        m.note_trim(budget.phase_of(prompt), trims)
     return prompt, trims
 
 
@@ -651,8 +658,9 @@ def start_job(fn, *args):
             pid = args[0] if args and isinstance(args[0], str) else None
             if pid and meter.calls:
                 record_usage(pid, fn.__name__, summary)
+            total = usage_total(load_project(pid) or {}) if pid else None
             with job_lock:
-                jobs[job_id].update(status="done", result=result, usage=summary)
+                jobs[job_id].update(status="done", result=result, usage=summary, usage_total=total)
         except Exception as e:
             with job_lock:
                 jobs[job_id].update(status="error", error=str(e), usage=meter.summary() if meter.calls else None)
@@ -672,7 +680,9 @@ def record_usage(pid, job_name, summary):
         log = prj.setdefault("token_usage", [])
         log.append({"date": date.today().isoformat(), "job": job_name, "calls": summary.get("calls", 0),
                     "in_tokens": summary.get("in_tokens", 0), "out_tokens": summary.get("out_tokens", 0),
-                    "measured": summary.get("measured", 0), "cost_usd": summary.get("cost_usd")})
+                    "cache_tokens": summary.get("cache_tokens", 0), "measured": summary.get("measured", 0),
+                    "cost_usd": summary.get("cost_usd"), "by_phase": summary.get("by_phase") or {},
+                    "warnings": summary.get("warnings") or [], "text": summary.get("text", "")})
         del log[:-200]
         save_project(prj)
     except Exception:
@@ -688,7 +698,8 @@ def usage_now():
 def usage_total(prj):
     log = prj.get("token_usage") or []
     return {"calls": sum(x.get("calls", 0) for x in log), "in_tokens": sum(x.get("in_tokens", 0) for x in log),
-            "out_tokens": sum(x.get("out_tokens", 0) for x in log),
+            "out_tokens": sum(x.get("out_tokens", 0) for x in log), "cache_tokens": sum(x.get("cache_tokens", 0) for x in log),
+            "measured": sum(x.get("measured", 0) for x in log),
             "cost_usd": round(sum(x.get("cost_usd") or 0 for x in log), 4) or None}
 
 
@@ -720,7 +731,10 @@ def job_analyze(job_id, pid):
     k = project_karte(prj)
     k["cross"] = cross
     k["scripts_analyzed"] = len(scripts)
-    k["voice_card"] = voice_card(prj, k)
+    try:
+        k["voice_card"] = voice_card(prj, k)
+    except Exception:
+        k["voice_card"] = ""
     k["refs_norm"] = [normalize(s["text"])[:20000] for s in scripts if s.get("kind") != "fail"]
     save_karte(k)
     prj["karte_name"] = k["name"]
@@ -885,6 +899,22 @@ def run_jev_rubric(rubric_name, text):
             pass
 
 
+def ensure_block_names(bp):
+    """設計図の各ブロックに非空のブロック名を保証する（無ければ「ブロックN」）。照合キーになるため。"""
+    if not isinstance(bp, dict):
+        return bp
+    blocks = [b for b in (bp.get("blocks") or []) if isinstance(b, dict)]
+    seen = set()
+    for i, b in enumerate(blocks):
+        name = b.get("name")
+        if not isinstance(name, str) or not name.strip() or name.strip() in seen:
+            name = f"ブロック{i + 1}"
+        b["name"] = name.strip()
+        seen.add(b["name"])
+    bp["blocks"] = blocks
+    return bp
+
+
 def job_blueprint(job_id, pid, concept, revise):
     prj = load_project(pid)
     prj["concept"] = concept
@@ -892,18 +922,18 @@ def job_blueprint(job_id, pid, concept, revise):
         prj["intent"] = concept["theme"]
     k = project_karte(prj)
     set_progress(job_id, "設計図（ブロック構成表）を作成中…")
-    bp = extract_json(run_claude(prompts.p4_blueprint(
+    bp = ensure_block_names(extract_json(run_claude(prompts.p4_blueprint(
         json.dumps(prj["cross"], ensure_ascii=False),
-        json.dumps(concept_with_pack(prj, k), ensure_ascii=False), revise)))
+        json.dumps(concept_with_pack(prj, k), ensure_ascii=False), revise))))
     prj.update(blueprint=bp, step=4)
     save_project(prj)
     audit = run_bp_audit(job_id, prj, k)
     fix = ext.build_bp_fix(audit)
     if fix and current_settings().get("bp_autofix", True):
         set_progress(job_id, f"設計図の不合格{audit['ng']}件を修正中…")
-        bp = extract_json(run_claude(prompts.p4_blueprint(
+        bp = ensure_block_names(extract_json(run_claude(prompts.p4_blueprint(
             json.dumps(prj["cross"], ensure_ascii=False),
-            json.dumps(concept_with_pack(prj, k), ensure_ascii=False), (revise + "\n\n" + fix).strip())))
+            json.dumps(concept_with_pack(prj, k), ensure_ascii=False), (revise + "\n\n" + fix).strip()))))
         prj["blueprint"] = bp
         save_project(prj)
         audit = run_bp_audit(job_id, prj, k)
@@ -915,8 +945,7 @@ def job_blueprint(job_id, pid, concept, revise):
 
 def _copyfix(job_id, prj, result):
     """機械コピーチェック（連続20文字一致）。一致を含むブロックだけを書き直す（他ブロックは触らない）。
-    一致がブロック境界をまたぐ場合は隣接2ブロックの連結で探して両方を対象にする。
-    どのブロックにも見つからない一致が残る時だけ、従来の全文版 p7_fixcopy に回す。
+    一致の位置から重なるブロックを全部対象にする（境界またぎ・複数ブロックにわたる一致も）。全文の書き直しには落とさない。
     （旧：数か所の一致のために台本全文を再生成していた）"""
     refs = [s["text"] for s in prj["scripts"] if s.get("kind") != "fail"]
     teikei = (prj.get("cross") or {}).get("teikei", [])
@@ -925,17 +954,19 @@ def _copyfix(job_id, prj, result):
     if check["violations"]:
         blocks = result.get("script_blocks", [])
         norm = [normalize(b.get("text", "")) for b in blocks]
-        targets, orphan = set(), []
+        joined, starts, pos_ = "".join(norm), [], 0
+        for t in norm:
+            starts.append(pos_)
+            pos_ += len(t)
+        targets = set()
         for v in check["violations"]:
-            found = {blocks[i].get("name") for i, t in enumerate(norm) if v in t}
-            if not found:
-                for i in range(len(blocks) - 1):
-                    if v in norm[i] + norm[i + 1]:
-                        found |= {blocks[i].get("name"), blocks[i + 1].get("name")}
-            if found:
-                targets |= found
-            else:
-                orphan.append(v)
+            # 一致文字列は normalize 後の全文の部分文字列なので、位置で重なるブロックを全部対象にする（境界またぎ・3ブロック以上も）
+            pos = joined.find(v)
+            while pos != -1:
+                for i, t in enumerate(norm):
+                    if starts[i] < pos + len(v) and pos < starts[i] + len(t):
+                        targets.add(blocks[i].get("name"))
+                pos = joined.find(v, pos + 1)
         if targets:
             hit = [b for b in blocks if b.get("name") in targets]
             set_progress(job_id, f"コピー疑い{len(check['violations'])}件を含む{len(hit)}ブロックだけ書き直し中…")
@@ -946,16 +977,9 @@ def _copyfix(job_id, prj, result):
                     json.dumps(neighbor_context(blocks, targets), ensure_ascii=False))))
                 got = {str(x.get("name", "")).strip(): x.get("text", "") for x in res.get("script_blocks", []) if isinstance(x, dict) and x.get("text")}
                 for b in blocks:
-                    hit_name = match_block_name(got, b.get("name")) if b.get("name") in targets else None
+                    hit_name = match_block_name(got, b.get("name"), expected=targets) if b.get("name") in targets else None
                     if hit_name:
                         b["text"] = got[hit_name]
-            except Exception:
-                pass
-        elif orphan:
-            set_progress(job_id, f"コピー疑い{len(orphan)}件の位置を特定できないため全文で書き直し中…")
-            try:
-                result = extract_json(run_claude(prompts.p7_fixcopy(
-                    json.dumps(result, ensure_ascii=False), json.dumps(orphan, ensure_ascii=False))))
             except Exception:
                 pass
         check = copycheck(script_text(result), refs, teikei)
@@ -998,7 +1022,7 @@ def run_audit(job_id, prj, karte, script, materials, changed=None, prev=None):
     """独立検品官（p13）＋冒頭30秒レビュー（p22）＋口調照合（p25）＋外部採点（任意）。引用は本文と機械照合する。
     changed（変わったブロック名の集合）と prev（前回の結果）を渡すと差分再検品：
       検品官は横断項目（重複・定義前使用・構成順）のため毎回全文を見る。
-      冒頭レビューは先頭2ブロックが変わった時だけ、口調照合は変わったブロックだけ再実行し、他は前回を引き継ぐ。"""
+      冒頭レビューは採点に使った冒頭本文が変わった時だけ、口調照合は変わったブロックだけ再実行し、他は前回を引き継ぐ。"""
     checklist = list((karte.get("cross") or {}).get("checklist", []))
     checklist += ext.character_checklist(karte.get("character_sheet"))
     checklist += ext.world_checklist(karte.get("world_sheet"))
@@ -1037,14 +1061,15 @@ def run_audit(job_id, prj, karte, script, materials, changed=None, prev=None):
             changed = set(changed) | {n_ for n_ in cur_hash if ph.get(n_) != cur_hash[n_]}
         else:
             changed = None
-    head_names = {b.get("name") for b in blocks_[:2]}
-    if changed is not None and prev and prev.get("hook") and not (changed & head_names):
+    # 採点に使う冒頭本文（先頭ブロック。600字未満なら2番目も）を先に組み、そのハッシュで「冒頭が変わったか」を判定する
+    opening = blocks_[0].get("text", "") if blocks_ else script_text(script)
+    if len(opening) < 600 and len(blocks_) > 1:
+        opening += "\n" + blocks_[1].get("text", "")
+    opening_hash = budget.text_hash(opening)
+    if changed is not None and prev and prev.get("hook") and prev.get("hook_hash") == opening_hash:
         hook = prev["hook"]  # 冒頭が変わっていない → 前回の採点を引き継ぐ
     else:
         set_progress(job_id, "冒頭30秒を採点中…")
-        opening = blocks_[0].get("text", "") if blocks_ else script_text(script)
-        if len(opening) < 600 and len(blocks_) > 1:
-            opening += "\n" + blocks_[1].get("text", "")
         hook = extract_json(run_claude(ext.p22_hook_review(
             opening, json.dumps(karte.get("concept_sheet") or {}, ensure_ascii=False),
             json.dumps(karte.get("character_sheet") or {}, ensure_ascii=False))))
@@ -1064,7 +1089,8 @@ def run_audit(job_id, prj, karte, script, materials, changed=None, prev=None):
         jev = run_jev(script, karte.get("character_sheet"), ref_excerpts(prj, 500), karte.get("world_sheet"))
     items = build_fix_items(prj, audit, hook, tone, jev)
     ng = sum(1 for it in items if it["decision"] != "ignore")
-    return {"audit": audit, "hook": hook, "jev": jev, "tone": tone, "ng": ng, "fix_items": items, "block_hash": cur_hash}
+    return {"audit": audit, "hook": hook, "jev": jev, "tone": tone, "ng": ng, "fix_items": items, "block_hash": cur_hash,
+            "hook_hash": opening_hash}
 
 
 def _item_key(source, text):
@@ -1145,7 +1171,7 @@ def _audit_loop(job_id, prj, k, rounds_override=None, polish=True):
             log[-1]["note"] = out["note"]
         if not out.get("targets"):
             break
-        fix_lengths(job_id, prj, k)
+        fix_lengths(job_id, prj, k, only_names=out["targets"])
         save_project(prj)
         changed = changed_block_names(before, prj["script"].get("script_blocks", []))
         prev = res
@@ -1236,14 +1262,14 @@ def revise_targets(job_id, prj, k, items, extra=""):
         frac = (min(idx) + 0.5) / max(1, len(blocks)) if idx else None
 
         def build(v):
-            return prompts.p6_partial(prompts._blueprint_for_writer(bp_json, focus=targets), json.dumps(tj, ensure_ascii=False), ctx,
-                                      instruction, prj.get("materials", ""), v["samples"])
+            return prompts.p6_partial(bp_json, json.dumps(tj, ensure_ascii=False), ctx,
+                                      instruction, prj.get("materials", ""), v["samples"], focus=targets)
         prompt, _ = shrink_to_cap(build, [["samples", with_voice(prj, k, style_samples_text(k, frac)), "hmt", 800]], cap)
         res = extract_json(run_claude(prompt))
         got = {str(x.get("name", "")).strip(): x.get("text") for x in res.get("script_blocks", []) if isinstance(x, dict) and x.get("text")}
         for b in blocks:
             if b.get("name") in targets:
-                hit = match_block_name(got, b.get("name"))
+                hit = match_block_name(got, b.get("name"), expected=targets)
                 if hit:
                     b["text"] = got[hit]
         script["total_chars"] = count_chars(script_text(script))
@@ -1268,7 +1294,7 @@ def write_in_blocks(job_id, prj, k, materials):
     直前までの本文は末尾 prev_text_cap 字（それ以前は各ブロックの recap：出した主張・具体例・数字・予告）。
     返ってこなかったブロックは順番で詰めず、軽量プロンプトで単独生成する。字数が外れたブロックも同じ軽量プロンプトで直す。"""
     s = current_settings()
-    bp = prj["blueprint"] or {}
+    bp = ensure_block_names(prj["blueprint"] or {})
     blocks = [b for b in bp.get("blocks", []) if isinstance(b, dict)]
     limit = int(s.get("write_chunk_chars") or 2400)
     max_blocks = int(s.get("max_blocks_per_chunk") or 4)
@@ -1320,7 +1346,7 @@ def write_in_blocks(job_id, prj, k, materials):
         def build(v):
             return ext.p29_write_blocks(cross_json, bp_json, concept_json, target_json, v["prev"], covered, remaining,
                                         v["voice"], materials, first=first, last=last, focus=focus)
-        prompt, _ = shrink_to_cap(build, [["voice", voice, "hmt", 3000], ["prev", so_far, "tail", 1200]], cap)
+        prompt, _ = shrink_to_cap(build, [["voice", voice, "head", 3000], ["prev", so_far, "tail", 1200]], cap)
         res = extract_json(run_claude(prompt))
         got = {}
         for x in res.get("script_blocks", []):
@@ -1328,7 +1354,7 @@ def write_in_blocks(job_id, prj, k, materials):
                 got[str(x.get("name", "")).strip()] = x
         missing = []
         for b in ch:
-            hit = match_block_name(got, b.get("name"))
+            hit = match_block_name(got, b.get("name"), expected=[x.get("name") for x in ch])
             if hit:
                 written.append({"name": b.get("name"), "text": got[hit].get("text", ""), "recap": str(got[hit].get("recap") or "")})
                 got.pop(hit, None)
@@ -1338,7 +1364,7 @@ def write_in_blocks(job_id, prj, k, materials):
         if missing:
             set_progress(job_id, f"返ってこなかったブロック「{'／'.join(missing)}」を単独で生成中…")
         # 返ってこなかったブロックの単独生成＋字数が目安から外れたブロックの調整（同じ軽量プロンプト）
-        adjust_lengths(job_id, prj, k, written, only=ch, tolerance=(0.75, 1.3), materials=materials)
+        adjust_lengths(job_id, prj, k, written, only=ch, tolerance=LENGTH_TOL, materials=materials)
         for w in written[-len(ch):]:
             if not w.get("text"):
                 kakunin.append(f"ブロック「{w['name']}」の本文が生成されませんでした（空のままです。修正リストか添削で埋めてください）")
@@ -1350,21 +1376,25 @@ def write_in_blocks(job_id, prj, k, materials):
             "write_mode": "blocks", "chunks": len(chunks)}
 
 
-def match_block_name(got, name):
-    """返ってきたブロック名を設計図名に照合する：完全一致 → 番号・記号の接頭辞を除いた一致 → 片方が他方を含む。"""
+def match_block_name(got, name, expected=None):
+    """返ってきたブロック名を設計図名に照合する：完全一致 → 番号・記号の接頭辞を除いた一致 →
+    片方が他方を含む（ただし同じ束の他のブロック名に当たるキーは除外し、候補がちょうど1つのときだけ。
+    「CTA」と「中間CTA」のように名前が含み合うブロックで本文を取り違えないため）。"""
     if not name:
         return None
     if name in got:
         return name
     strip = lambda x: re.sub(r"^(ブロック|第)?\s*\d+\s*[：:.、．)）]?\s*", "", str(x or "")).strip()
     want = strip(name)
+    if not want:
+        return None
     for g in got:
-        if strip(g) == want and want:
+        if strip(g) == want:
             return g
-    for g in got:
-        if want and (want in g or strip(g) in name) and len(strip(g)) >= 2:
-            return g
-    return None
+    others = {e for e in (expected or []) if e and e != name} | {strip(e) for e in (expected or []) if e and e != name}
+    cands = [g for g in got
+             if len(strip(g)) >= 2 and g not in others and strip(g) not in others and (want in g or strip(g) in name)]
+    return cands[0] if len(cands) == 1 else None
 
 
 def adjust_lengths(job_id, prj, k, written, only=None, tolerance=(0.75, 1.25), materials=""):
@@ -1414,7 +1444,7 @@ def adjust_lengths(job_id, prj, k, written, only=None, tolerance=(0.75, 1.25), m
     got = {str(x.get("name", "")).strip(): x.get("text", "") for x in res.get("script_blocks", []) if isinstance(x, dict) and x.get("text")}
     fixed = 0
     for w in bad:
-        hit = match_block_name(got, w["name"])
+        hit = match_block_name(got, w["name"], expected=[x["name"] for x in bad])
         if hit:
             tgt = ext._num(rows[w["name"]]["chars"])
             if not w.get("text") or abs(count_chars(got[hit]) - tgt) < abs(count_chars(w["text"]) - tgt):
@@ -1534,6 +1564,7 @@ def job_write(job_id, pid, materials):
 
 
 NL2 = chr(10)
+LENGTH_TOL = (0.75, 1.3)  # 設計図の目安に対する字数の許容幅（執筆時・修正後で同じ）
 
 
 MARKER_RE = re.compile(r"[\[［]要確認[：:]([^\]］]*)[\]］]|（推定）|\(推定\)")
@@ -1626,7 +1657,7 @@ def run_polish(job_id, prj, k, only_changed=False):
             continue
         by_name = {str(b.get("name", "")).strip(): b.get("text") for b in res.get("script_blocks", []) if isinstance(b, dict) and b.get("text")}
         for b in ch:
-            hit = match_block_name(by_name, b.get("name"))
+            hit = match_block_name(by_name, b.get("name"), expected=[x.get("name") for x in ch])
             if hit:
                 b["text"] = by_name[hit]
                 hashes[b.get("name")] = budget.text_hash(b["text"])  # 返ってきたブロックだけを推敲済みとして記録
@@ -1749,7 +1780,7 @@ def run_tone(job_id, prj, k, script, only_blocks=None, prev=None):
         return ext.p25_tone_check(json.dumps({"script_blocks": [{"name": b.get("name"), "text": b.get("text", "")} for b in target]}, ensure_ascii=False),
                                   v["refs"], json.dumps(style, ensure_ascii=False),
                                   json.dumps(k.get("character_sheet") or {}, ensure_ascii=False), partial_note=note)
-    prompt, _ = shrink_to_cap(build, [["refs", with_voice(prj, k, ref_for_tone(prj)), "hmt", 1200]], cap)
+    prompt, _ = shrink_to_cap(build, [["refs", with_voice(prj, k, ref_for_tone(prj)), "head", 1200]], cap)
     res = extract_json(run_claude(prompt))
     body = normalize(script_text(script))
     ok = [m for m in res.get("mismatches", [])
@@ -1789,7 +1820,7 @@ def job_revise_selected(job_id, pid, decisions, extra):
         save_project(prj)
         return {"script": prj["script"], "audit": prj["audit"], "audit_log": prj.get("audit_log"), "polish": prj.get("polish"),
                 "changes": [], "note": out.get("note", ""), "usage": usage_now()}
-    fix_lengths(job_id, prj, k)
+    fix_lengths(job_id, prj, k, only_names=out["targets"])
     changes = []
     for b in prj["script"].get("script_blocks", []):
         old = before.get(b.get("name"), "")
@@ -1813,10 +1844,13 @@ def job_revise_selected(job_id, pid, decisions, extra):
             "note": out.get("note", ""), "usage": usage_now()}
 
 
-def fix_lengths(job_id, prj, k):
-    """修正後の字数照合。設計図の目安±25%を外れたブロックだけを、軽量な字数調整で1回書き直す。"""
+def fix_lengths(job_id, prj, k, only_names=None):
+    """修正後の字数照合。書き直した対象ブロック（only_names）のうち設計図の目安を外れたものだけを、軽量な字数調整で1回書き直す。
+    触っていない合格ブロックには手を出さない。"""
     script = prj["script"]
-    n = adjust_lengths(job_id, prj, k, script.get("script_blocks", []), tolerance=(0.75, 1.25))
+    blocks = script.get("script_blocks", [])
+    only = [b for b in blocks if b.get("name") in only_names] if only_names is not None else None
+    n = adjust_lengths(job_id, prj, k, blocks, only=only, tolerance=LENGTH_TOL)
     script["total_chars"] = count_chars(script_text(script))
     prj["script"] = script
     return n
