@@ -1,0 +1,1750 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>添削プレイヤー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: 編集ソフト風の2カラム。左=プレイヤーと操作、右=修正コメントの台帳。狭い画面では縦に積む */
+:root {
+  --bg: #0b1016;
+  --panel: #121922;
+  --panel-2: #18212d;
+  --line: #243142;
+  --fg: #e6ecf3;
+  --muted: #8a99ad;
+  --accent: #39d5c1;      /* コメント操作 */
+  --accent-ink: #04211d;
+  --accent-soft: rgba(57, 213, 193, 0.14);
+  --playhead: #f2b43c;    /* 再生位置・倍速 */
+  --rec: #ff5c63;         /* 聞き取り中 */
+  --done: #74d394;
+  --font-ui: "Zen Kaku Gothic New", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+kbd {
+  font-family: var(--font-num);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  opacity: 0.7;
+}
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  padding: 12px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 900;
+  font-size: 17px;
+  letter-spacing: 0.04em;
+}
+.brand svg { width: 26px; height: 26px; }
+.file-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-meta strong { color: var(--fg); font-weight: 700; }
+.top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+.btn:hover { border-color: var(--muted); }
+.btn svg { width: 16px; height: 16px; fill: currentColor; flex: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 410px;
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+.stage { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* ---------- screen ---------- */
+.screen {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 60vh;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.screen video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.dropzone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  background:
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.018) 0 14px, transparent 14px 28px),
+    var(--panel);
+}
+.dropzone h2 { margin: 0; font-size: clamp(18px, 2.4vw, 26px); font-weight: 900; text-wrap: balance; }
+.dropzone p { margin: 0; max-width: 34em; color: var(--muted); font-size: 13px; text-wrap: pretty; }
+.dropzone .btn { min-height: 44px; padding-inline: 22px; font-size: 15px; }
+body.dragging .dropzone,
+body.dragging .screen { outline: 3px dashed var(--accent); outline-offset: -8px; }
+
+.screen-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(5, 9, 14, 0.82);
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* ---------- comment dock ---------- */
+.dock {
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--panel);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 0 30px rgba(57, 213, 193, 0.18);
+}
+.comment-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+.comment-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.comment-btn:hover { filter: brightness(1.07); }
+.comment-btn:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+.dock-hint { margin: 10px 2px 0; color: var(--muted); font-size: 12px; text-align: center; }
+
+.composer { display: flex; flex-direction: column; gap: 10px; }
+.composer-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.composer-ctx { color: var(--muted); font-size: 12px; min-width: 0; }
+.rec-state { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--muted); margin-left: auto; }
+.rec-state.listening { color: var(--rec); }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex: none; }
+.rec-state.listening .rec-dot { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+.composer textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 17px;
+  line-height: 1.55;
+}
+.composer textarea:focus { border-color: var(--accent); outline: none; }
+.composer-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.composer-actions .spacer { flex: 1; }
+
+/* ---------- transport ---------- */
+.transport {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.seek-row { display: flex; align-items: center; gap: 14px; }
+.time { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 700; min-width: 3.6em; }
+.time.end { color: var(--muted); text-align: right; }
+.seek {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  cursor: pointer;
+  touch-action: none;
+}
+.seek-chapters { position: absolute; left: 0; right: 0; top: 11px; height: 12px; }
+.seek-chapter { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--panel); background: rgba(255, 255, 255, 0.05); }
+.seek-chapter:nth-child(even) { background: rgba(255, 255, 255, 0.09); }
+.seek-track { position: absolute; left: 0; right: 0; top: 15px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); }
+.seek-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 2px; background: var(--playhead); }
+.seek-knob {
+  position: absolute;
+  top: 9px;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--playhead);
+  box-shadow: 0 0 0 3px rgba(242, 180, 60, 0.25);
+  pointer-events: none;
+}
+.mark {
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.mark::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--accent);
+}
+.mark::after { content: ""; position: absolute; left: 6px; top: 7px; width: 2px; height: 8px; background: var(--accent); }
+.mark.done::before, .mark.done::after { background: var(--muted); opacity: 0.6; }
+
+.control-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; }
+.ctl-group { display: flex; align-items: center; gap: 6px; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
+.icon-btn.play { width: 46px; height: 46px; border-radius: 50%; background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.icon-btn.play svg { width: 22px; height: 22px; }
+.icon-btn:hover { border-color: var(--muted); }
+.ctl-label { color: var(--muted); font-size: 12px; margin-right: 2px; white-space: nowrap; }
+.speed {
+  min-width: 44px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-family: var(--font-num);
+  font-size: 13px;
+  font-weight: 700;
+}
+.speed[aria-pressed="true"] { color: var(--playhead); border-color: var(--playhead); background: rgba(242, 180, 60, 0.08); }
+.toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-left: auto; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.toggle input { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background 0.15s; }
+.toggle input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg); transition: transform 0.15s; }
+.toggle input:checked { background: var(--accent); }
+.toggle input:checked::after { transform: translateX(12px); background: var(--accent-ink); }
+
+.now-line {
+  display: flex;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 0;
+}
+.now-line b { color: var(--fg); font-weight: 700; }
+.now-line .line-text { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- chapters ---------- */
+.chapters { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.section-label { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.link-btn { border: 0; background: none; padding: 2px 0; color: var(--accent); font-size: 12px; font-weight: 700; }
+.link-btn:disabled { color: var(--muted); opacity: 0.6; cursor: not-allowed; }
+.chapter-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.chap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+  text-align: left;
+}
+.chap:hover { border-color: var(--muted); }
+.chap.current { border-color: var(--playhead); }
+.chap-no { font-family: var(--font-num); font-size: 11px; color: var(--muted); }
+.chap-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chap-time { font-family: var(--font-num); font-size: 11px; color: var(--muted); }
+.chap-del { margin-left: 2px; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 2px; }
+.chap-del:hover { color: var(--rec); }
+.chap-empty { color: var(--muted); font-size: 13px; margin: 0; }
+
+.shortcuts { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 12px; }
+.shortcuts span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- ledger (comments) ---------- */
+.ledger {
+  position: sticky;
+  top: 80px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  min-width: 0;
+}
+.ledger-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.ledger-head h2 { margin: 0; font-size: 16px; font-weight: 900; }
+.counts { color: var(--muted); font-size: 13px; }
+.counts b { color: var(--fg); }
+.seg { display: inline-flex; margin-left: auto; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: none; padding: 4px 10px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--panel-2); color: var(--fg); }
+
+.comment-list { list-style: none; margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 120px; }
+.c-item {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--panel-2);
+}
+.c-item.is-active { border-color: rgba(242, 180, 60, 0.6); }
+.c-item.is-new { animation: arrive 1.2s ease-out; }
+@keyframes arrive { from { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); } }
+.c-thumb {
+  position: relative;
+  width: 92px;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+}
+.c-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.c-no {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(5, 9, 14, 0.85);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.c-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.c-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.time-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 0;
+  background: rgba(98, 170, 255, 0.14);
+  color: #7fbaff;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+button.time-chip:hover { background: rgba(98, 170, 255, 0.24); }
+.c-ctx { color: var(--muted); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-text { margin: 0; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; cursor: text; border-radius: 4px; }
+.c-text:hover { background: rgba(255, 255, 255, 0.04); }
+.c-edit { width: 100%; min-height: 60px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--accent); background: var(--bg); font-size: 14px; resize: vertical; }
+.c-line { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.c-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.check input { accent-color: var(--done); width: 15px; height: 15px; margin: 0; }
+.c-item.is-done .c-text { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(138, 153, 173, 0.6); }
+.c-item.is-done .check { color: var(--done); }
+.del-btn { border: 0; background: none; padding: 2px 4px; color: var(--muted); font-size: 12px; }
+.del-btn:hover { color: var(--rec); }
+
+.empty { padding: 18px 18px 8px; color: var(--muted); font-size: 13px; }
+.empty h3 { margin: 0 0 10px; color: var(--fg); font-size: 14px; }
+.steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; align-items: start; counter-increment: step; }
+.steps li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-weight: 700;
+}
+.steps b { color: var(--fg); }
+
+.handoff { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px 18px; border-top: 1px solid var(--line); }
+.handoff.attention { animation: attention 1.6s ease-out 2; }
+@keyframes attention { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+.handoff-title { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.handoff p { margin: 0; color: var(--muted); font-size: 12px; text-wrap: pretty; }
+.handoff p code { font-family: var(--font-num); font-size: 11px; color: var(--fg); }
+.handoff .btn.wide { width: 100%; min-height: 46px; font-size: 15px; }
+.handoff-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.handoff-row .btn { white-space: normal; text-align: center; }
+.handoff details { font-size: 12px; color: var(--muted); }
+.handoff summary { cursor: pointer; font-weight: 700; }
+.handoff pre {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-num);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- toast ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #1d2836;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  transform: translate(-50%, 140%);
+  opacity: 0;
+  transition: transform 0.2s, opacity 0.2s;
+}
+.toast.show { transform: translate(-50%, 0); opacity: 1; }
+.toast button { border: 0; background: none; color: var(--accent); font-weight: 700; padding: 0; }
+
+@media (max-width: 1080px) {
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px 16px 40px; }
+  .ledger { position: static; max-height: none; }
+  .comment-list { overflow: visible; }
+  .topbar { padding-inline: 16px; }
+}
+@media (max-width: 560px) {
+  .c-item { grid-template-columns: 72px minmax(0, 1fr); }
+  .c-thumb { width: 72px; }
+  .comment-btn { font-size: 16px; }
+  .toggles { margin-left: 0; }
+  .handoff-row { grid-template-columns: 1fr; }
+  .shortcuts { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="3" width="24" height="17" rx="5" fill="#39d5c1"/><path d="M7 20l-1 5 6-5z" fill="#39d5c1"/><path d="M10.5 7.5v8l6.5-4z" fill="#04211d"/></svg>
+    添削プレイヤー
+  </div>
+  <div class="file-meta" id="fileMeta">動画が未選択です</div>
+  <div class="top-actions">
+    <label class="btn" for="videoInput">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h11a2 2 0 0 1 2 2v2.5l4-2.5v10l-4-2.5V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>
+      動画を開く
+    </label>
+    <label class="btn" for="dataInput" title="video-engine の timeline.json / 字幕 .srt .vtt / 保存した review.json">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5zM8 13h8v2H8zm0 4h8v2H8z"/></svg>
+      台本・字幕を読み込む
+    </label>
+  </div>
+  <input type="file" id="videoInput" accept="video/*,.mp4,.mov,.webm,.m4v" hidden>
+  <input type="file" id="dataInput" accept=".json,.srt,.vtt,application/json" multiple hidden>
+</header>
+
+<main class="layout">
+  <section class="stage" aria-label="プレイヤー">
+    <div class="screen" id="screen">
+      <video id="video" playsinline preload="auto"></video>
+      <div class="dropzone" id="dropzone">
+        <h2>確認したい動画をここにドロップ</h2>
+        <p>MP4 / MOV / WebM に対応。動画はこのブラウザの中だけで再生され、どこにもアップロードされません。</p>
+        <label class="btn primary" for="videoInput">動画を選ぶ</label>
+        <p>video-engine の <span class="num">timeline.json</span> や字幕 <span class="num">.srt</span> も一緒にドロップすると、コメントに「どの幕・どの台詞か」が自動で付きます。</p>
+      </div>
+      <div class="screen-badge" id="screenBadge" hidden>
+        <span class="rec-dot" style="color: var(--rec)"></span>
+        <span id="screenBadgeText">一時停止中</span>
+      </div>
+    </div>
+
+    <div class="dock" id="dock">
+      <button class="comment-btn" id="commentBtn" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+        いま止めた位置にコメント
+        <kbd>C</kbd>
+      </button>
+      <p class="dock-hint" id="dockHint">押すと動画が止まり、そのまま声で話せます。話し終わると自動で保存して再生に戻ります。</p>
+
+      <div class="composer" id="composer" hidden>
+        <div class="composer-head">
+          <span class="time-chip" id="draftTime">0分00秒</span>
+          <span class="composer-ctx" id="draftCtx"></span>
+          <span class="rec-state" id="recState"><span class="rec-dot"></span><span id="recText">準備中</span></span>
+        </div>
+        <textarea id="draftText" rows="2" placeholder="例：ここの文字をもう少し大きくしてください"></textarea>
+        <div class="composer-actions">
+          <button class="btn" id="micBtn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+            <span id="micLabel">声で続きを話す</span>
+          </button>
+          <span class="spacer"></span>
+          <button class="btn" id="cancelBtn" type="button">やめる <kbd>Esc</kbd></button>
+          <button class="btn primary" id="saveBtn" type="button">保存 <kbd>Enter</kbd></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="transport">
+      <div class="seek-row">
+        <span class="time" id="curTime">0:00</span>
+        <div class="seek" id="seek" role="slider" tabindex="0" aria-label="再生位置" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div class="seek-chapters" id="seekChapters"></div>
+          <div class="seek-track"><div class="seek-fill" id="seekFill"></div></div>
+          <div id="seekMarks"></div>
+          <div class="seek-knob" id="seekKnob"></div>
+        </div>
+        <span class="time end" id="durTime">0:00</span>
+      </div>
+
+      <div class="control-row">
+        <div class="ctl-group">
+          <button class="icon-btn" id="frameBack" type="button" aria-label="1コマ戻る" title="1コマ戻る（,）"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+          <button class="icon-btn" id="back5" type="button" aria-label="5秒戻る" title="5秒戻る（←）"><svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6zm.5-6 8.5 6V6z"/></svg></button>
+          <button class="icon-btn play" id="playBtn" type="button" aria-label="再生" title="再生 / 停止（Space）"><svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="icon-btn" id="fwd5" type="button" aria-label="5秒進む" title="5秒進む（→）"><svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6zm9-12v12l8.5-6z"/></svg></button>
+          <button class="icon-btn" id="frameFwd" type="button" aria-label="1コマ進む" title="1コマ進む（.）"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
+        </div>
+        <div class="ctl-group" id="speeds">
+          <span class="ctl-label">倍速</span>
+        </div>
+        <div class="toggles">
+          <label class="toggle" title="話し終わって少し間が空いたら、自動でコメントを保存します"><input type="checkbox" id="autoCommit"> 話し終わったら自動保存</label>
+          <label class="toggle" title="コメントを保存したら、止めた位置から再生を再開します"><input type="checkbox" id="autoResume"> 保存したら再生に戻る</label>
+        </div>
+      </div>
+
+      <div class="now-line" id="nowLine"></div>
+    </div>
+
+    <div class="chapters">
+      <div class="section-head">
+        <span class="section-label">幕へ移動</span>
+        <button class="link-btn" id="addChapterBtn" type="button" disabled>＋ いまの位置で幕を区切る</button>
+      </div>
+      <div class="chapter-list" id="chapterList"></div>
+    </div>
+
+    <div class="shortcuts" aria-label="キーボード操作">
+      <span><kbd>Space</kbd> 再生 / 停止</span>
+      <span><kbd>C</kbd> コメント</span>
+      <span><kbd>←</kbd><kbd>→</kbd> 5秒</span>
+      <span><kbd>,</kbd><kbd>.</kbd> 1コマ</span>
+      <span><kbd>1</kbd>〜<kbd>6</kbd> 倍速</span>
+      <span><kbd>[</kbd><kbd>]</kbd> 前後のコメントへ</span>
+    </div>
+  </section>
+
+  <aside class="ledger" aria-label="修正コメント">
+    <div class="ledger-head">
+      <h2>修正コメント</h2>
+      <span class="counts" id="counts"></span>
+      <div class="seg" role="group" aria-label="表示するコメント">
+        <button type="button" data-filter="all" aria-pressed="true">すべて</button>
+        <button type="button" data-filter="open" aria-pressed="false">未対応</button>
+      </div>
+    </div>
+
+    <ol class="comment-list" id="commentList"></ol>
+
+    <div class="empty" id="emptyState">
+      <h3>使い方</h3>
+      <ol class="steps">
+        <li><span><b>完成した動画を開いて再生</b>します。倍速で流し見しても大丈夫です。</span></li>
+        <li><span>気になった所で <b>［C］かコメントボタン</b>。動画が止まるので、そのまま<b>声で直してほしいこと</b>を話します。</span></li>
+        <li><span>話し終わると<b>時刻つきで自動保存</b>され、再生に戻ります。これを最後まで繰り返します。</span></li>
+        <li><span>見終わったら下の<b>「AIへの修正指示をコピー」</b>を押して、AIに貼り付けて直してもらいます。</span></li>
+      </ol>
+    </div>
+
+    <div class="handoff" id="handoff">
+      <div class="handoff-title">AIに渡す</div>
+      <p>コピーした指示文を Claude Code などに貼り付けます。<code>review.json</code> を動画のフォルダに保存して「review.json を見て直して」と伝えても同じです。</p>
+      <button class="btn primary wide" id="copyBtn" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h9a2 2 0 0 1 2 2v12h-2V5H8zM5 7h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"/></svg>
+        AIへの修正指示をコピー
+      </button>
+      <div class="handoff-row">
+        <button class="btn" id="saveJsonBtn" type="button">review.json を保存</button>
+        <button class="btn" id="saveZipBtn" type="button">画面の画像つきで保存 (.zip)</button>
+      </div>
+      <details>
+        <summary>指示文のプレビュー</summary>
+        <pre id="promptPreview"></pre>
+      </details>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (s) => document.querySelector(s);
+  const els = {
+    video: $('#video'), screen: $('#screen'), dropzone: $('#dropzone'),
+    fileMeta: $('#fileMeta'), videoInput: $('#videoInput'), dataInput: $('#dataInput'),
+    commentBtn: $('#commentBtn'), dockHint: $('#dockHint'), composer: $('#composer'),
+    draftTime: $('#draftTime'), draftCtx: $('#draftCtx'), draftText: $('#draftText'),
+    recState: $('#recState'), recText: $('#recText'), micBtn: $('#micBtn'), micLabel: $('#micLabel'),
+    cancelBtn: $('#cancelBtn'), saveBtn: $('#saveBtn'),
+    screenBadge: $('#screenBadge'), screenBadgeText: $('#screenBadgeText'),
+    curTime: $('#curTime'), durTime: $('#durTime'), seek: $('#seek'), seekFill: $('#seekFill'),
+    seekKnob: $('#seekKnob'), seekMarks: $('#seekMarks'), seekChapters: $('#seekChapters'),
+    playBtn: $('#playBtn'), playIcon: $('#playIcon'), back5: $('#back5'), fwd5: $('#fwd5'),
+    frameBack: $('#frameBack'), frameFwd: $('#frameFwd'), speeds: $('#speeds'),
+    autoCommit: $('#autoCommit'), autoResume: $('#autoResume'), nowLine: $('#nowLine'),
+    chapterList: $('#chapterList'), addChapterBtn: $('#addChapterBtn'),
+    counts: $('#counts'), commentList: $('#commentList'), emptyState: $('#emptyState'),
+    handoff: $('#handoff'), copyBtn: $('#copyBtn'), saveJsonBtn: $('#saveJsonBtn'), saveZipBtn: $('#saveZipBtn'),
+    promptPreview: $('#promptPreview'), toast: $('#toast'),
+  };
+  const video = els.video;
+
+  const SPEEDS = [1, 1.5, 2, 3, 4, 5];
+  const FRAME = 1 / 30;
+  const SILENCE_MS = 1600;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ---------- storage (失敗しても動くように全部 try で包む) ----------
+  const store = {
+    get(key, fallback) {
+      try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
+      catch { return fallback; }
+    },
+    set(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+      catch { return false; }
+    },
+  };
+  const settings = Object.assign({ autoCommit: true, autoResume: true, speed: 1 }, store.get('vr:settings', {}));
+  const saveSettings = () => store.set('vr:settings', settings);
+
+  const state = {
+    url: '', key: '', name: '', size: 0, duration: 0, width: 0, height: 0,
+    comments: [],   // {id, t, text, done, chapter, sentKey, sentText, thumb, createdAt}
+    chapters: [],   // {label, t0, manual}
+    sents: [],      // {key, text, t0, t1}
+    dataName: '',
+    looseData: false,
+    filter: 'all',
+  };
+
+  // ---------- format ----------
+  const pad2 = (n) => String(n).padStart(2, '0');
+  function parts(t) {
+    t = Math.max(0, t || 0);
+    return { h: Math.floor(t / 3600), m: Math.floor((t % 3600) / 60), s: Math.floor(t % 60), d: Math.floor((t % 1) * 10) };
+  }
+  function fmtClock(t) {
+    const p = parts(t);
+    return p.h ? `${p.h}:${pad2(p.m)}:${pad2(p.s)}` : `${p.m}:${pad2(p.s)}`;
+  }
+  function fmtPrecise(t) {
+    const r = Math.round(Math.max(0, t || 0) * 10) / 10;
+    return `${fmtClock(r)}.${Math.round((r % 1) * 10) % 10}`;
+  }
+  function fmtJa(t) {
+    const p = parts(t);
+    return (p.h ? `${p.h}時間` : '') + `${p.m}分${pad2(p.s)}秒`;
+  }
+  function fmtFile(t) {
+    const p = parts(t);
+    return (p.h ? `${p.h}h` : '') + `${p.m}m${pad2(p.s)}s`;
+  }
+  const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+  const baseName = (n) => (n || 'video').replace(/\.[^.]+$/, '');
+  const isScriptKey = (k) => !!k && !k.startsWith('#');
+
+  // ---------- toast ----------
+  let toastTimer = 0;
+  function toast(msg, action) {
+    clearTimeout(toastTimer);
+    els.toast.textContent = '';
+    const span = document.createElement('span');
+    span.textContent = msg;
+    els.toast.appendChild(span);
+    if (action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = action.label;
+      b.addEventListener('click', () => { action.run(); els.toast.classList.remove('show'); });
+      els.toast.appendChild(b);
+    }
+    els.toast.classList.add('show');
+    toastTimer = setTimeout(() => els.toast.classList.remove('show'), action ? 6000 : 3200);
+  }
+
+  // ---------- context: その時刻はどの幕・どの台詞か ----------
+  function chapterAt(t) {
+    let cur = null;
+    for (const c of state.chapters) if (c.t0 <= t + 0.001) cur = c;
+    return cur;
+  }
+  function sentAt(t) {
+    let near = null;
+    for (const s of state.sents) {
+      if (s.t0 <= t && t <= s.t1) return s;
+      if (s.t1 <= t && t - s.t1 < 1.5) near = s;
+    }
+    return near;
+  }
+  function contextAt(t) {
+    return { chapter: chapterAt(t), sent: sentAt(t) };
+  }
+  function ctxLabel(chapter, sentKey, sentText) {
+    const out = [];
+    if (chapter) out.push(`幕「${chapter}」`);
+    if (sentText) out.push(`${isScriptKey(sentKey) ? sentKey + ' ' : ''}「${clip(sentText, 28)}」`);
+    return out.join(' ・ ');
+  }
+
+  // ---------- persistence ----------
+  function persist() {
+    if (!state.key) return;
+    const payload = {
+      name: state.name, size: state.size, savedAt: Date.now(),
+      comments: state.comments, chapters: state.chapters, sents: state.sents, dataName: state.dataName,
+    };
+    if (!store.set(state.key, payload)) {
+      // 容量オーバー時はサムネイルを外して保存する
+      payload.comments = state.comments.map(({ thumb, ...c }) => c);
+      store.set(state.key, payload);
+    }
+  }
+
+  // ---------- video ----------
+  function isVideoFile(f) { return f.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv)$/i.test(f.name); }
+  function isDataFile(f) { return /\.(json|srt|vtt)$/i.test(f.name); }
+
+  function openVideo(file) {
+    closeComposer();
+    if (state.url) URL.revokeObjectURL(state.url);
+    state.name = file.name;
+    state.size = file.size;
+    state.key = `vr:session:${file.name}:${file.size}`;
+    state.url = URL.createObjectURL(file);
+    state.duration = 0;
+
+    const saved = store.get(state.key, null);
+    state.comments = saved?.comments || [];
+    if (saved && (saved.sents?.length || saved.chapters?.length)) {
+      state.chapters = saved.chapters || [];
+      state.sents = saved.sents || [];
+      state.dataName = saved.dataName || '';
+    } else if (!state.looseData) {
+      state.chapters = []; state.sents = []; state.dataName = '';
+    }
+    state.looseData = false;
+
+    video.src = state.url;
+    grabber.src = state.url;
+    els.dropzone.hidden = true;
+    renderAll();
+    if (state.comments.length) toast(`前回のコメント ${state.comments.length}件を読み込みました`);
+  }
+
+  video.addEventListener('loadedmetadata', () => {
+    state.duration = video.duration || 0;
+    state.width = video.videoWidth;
+    state.height = video.videoHeight;
+    video.defaultPlaybackRate = settings.speed;
+    video.playbackRate = settings.speed;
+    persist();
+    renderAll();
+    fillMissingThumbs();
+  });
+  video.addEventListener('error', () => {
+    if (!video.getAttribute('src')) return;
+    toast('この動画はブラウザで再生できない形式です。H.264 の MP4 に書き出すと開けます');
+  });
+  video.addEventListener('play', syncPlayState);
+  video.addEventListener('pause', syncPlayState);
+  video.addEventListener('ended', () => {
+    syncPlayState();
+    const open = state.comments.filter((c) => !c.done).length;
+    if (open) {
+      toast(`最後まで見終わりました。未対応のコメントは ${open}件です`);
+      els.handoff.classList.remove('attention');
+      void els.handoff.offsetWidth;
+      els.handoff.classList.add('attention');
+    }
+  });
+  video.addEventListener('timeupdate', () => { if (video.paused) updateTransport(); });
+  video.addEventListener('seeked', updateTransport);
+
+  let raf = 0;
+  function loop() { updateTransport(); raf = video.paused ? 0 : requestAnimationFrame(loop); }
+  function syncPlayState() {
+    const playing = !video.paused && !video.ended;
+    els.playIcon.innerHTML = playing ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+    els.playBtn.setAttribute('aria-label', playing ? '一時停止' : '再生');
+    if (playing && !raf) raf = requestAnimationFrame(loop);
+    updateTransport();
+  }
+  function togglePlay() {
+    if (!state.duration) return;
+    if (video.paused || video.ended) video.play().catch(() => {}); else video.pause();
+  }
+  function seekBy(dt) {
+    if (!state.duration) return;
+    video.currentTime = Math.min(Math.max(0, video.currentTime + dt), state.duration);
+  }
+  function stepFrame(dir) {
+    if (!state.duration) return;
+    video.pause();
+    seekBy(dir * FRAME);
+  }
+  function jumpTo(t) {
+    if (!state.duration) { toast('動画を開くと、その位置へ移動できます'); return; }
+    video.currentTime = Math.min(Math.max(0, t), state.duration);
+  }
+  function setSpeed(rate) {
+    settings.speed = rate;
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
+    saveSettings();
+    renderSpeeds();
+  }
+
+  // ---------- transport rendering ----------
+  let lastNowKey = '';
+  function updateTransport() {
+    const d = state.duration;
+    const t = video.currentTime || 0;
+    const pct = d ? (t / d) * 100 : 0;
+    els.seekFill.style.width = pct + '%';
+    els.seekKnob.style.left = pct + '%';
+    els.curTime.textContent = fmtClock(t);
+    els.durTime.textContent = fmtClock(d);
+    els.seek.setAttribute('aria-valuemax', String(Math.round(d)));
+    els.seek.setAttribute('aria-valuenow', String(Math.round(t)));
+    els.seek.setAttribute('aria-valuetext', fmtJa(t));
+
+    const ctx = contextAt(t);
+    const nowKey = (ctx.chapter?.t0 ?? '') + '|' + (ctx.sent?.t0 ?? '');
+    if (nowKey !== lastNowKey) { lastNowKey = nowKey; renderNowLine(ctx); renderChapterList(); }
+
+    // 再生位置の近くにあるコメントを強調する
+    for (const li of els.commentList.children) {
+      const c = state.comments.find((x) => x.id === li.dataset.id);
+      li.classList.toggle('is-active', !!c && Math.abs(c.t - t) < 1.2);
+    }
+  }
+  function renderNowLine(ctx) {
+    if (!state.chapters.length && !state.sents.length) {
+      els.nowLine.innerHTML = '<span>台本データ（timeline.json）や字幕を読み込むと、いまの幕と台詞がここに出て、コメントにも自動で付きます。</span>';
+      return;
+    }
+    const ch = ctx.chapter ? esc(ctx.chapter.label) : '—';
+    const s = ctx.sent;
+    const line = s ? `${isScriptKey(s.key) ? `<span class="num">${esc(s.key)}</span> ` : ''}「${esc(s.text)}」` : '—';
+    els.nowLine.innerHTML = `<span>幕 <b>${ch}</b></span><span class="line-text">台詞 <b>${line}</b></span>`;
+  }
+
+  function renderSpeeds() {
+    els.speeds.querySelectorAll('.speed').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.rate) === settings.speed)));
+  }
+  SPEEDS.forEach((r, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'speed';
+    b.dataset.rate = String(r);
+    b.textContent = r + 'x';
+    b.title = `${r}倍速（${i + 1}）` + (r > 4 ? ' ※ブラウザによっては音が消えます' : '');
+    b.addEventListener('click', () => setSpeed(r));
+    els.speeds.appendChild(b);
+  });
+
+  function renderMarks() {
+    const d = state.duration;
+    els.seekMarks.textContent = '';
+    els.seekChapters.textContent = '';
+    if (!d) return;
+    state.comments.forEach((c, i) => {
+      const m = document.createElement('button');
+      m.type = 'button';
+      m.className = 'mark' + (c.done ? ' done' : '');
+      m.style.left = (c.t / d) * 100 + '%';
+      m.title = `${i + 1}. ${fmtJa(c.t)} ${c.text}`;
+      m.setAttribute('aria-label', `コメント${i + 1}へ移動`);
+      m.addEventListener('pointerdown', (e) => e.stopPropagation());
+      m.addEventListener('click', (e) => { e.stopPropagation(); jumpTo(c.t); revealComment(c.id); });
+      els.seekMarks.appendChild(m);
+    });
+    state.chapters.forEach((c, i) => {
+      const next = state.chapters[i + 1]?.t0 ?? d;
+      const seg = document.createElement('div');
+      seg.className = 'seek-chapter';
+      seg.style.left = (c.t0 / d) * 100 + '%';
+      seg.style.width = (Math.max(0, next - c.t0) / d) * 100 + '%';
+      seg.title = c.label;
+      els.seekChapters.appendChild(seg);
+    });
+  }
+
+  function renderChapterList() {
+    const list = els.chapterList;
+    list.textContent = '';
+    els.addChapterBtn.disabled = !state.duration;
+    if (!state.chapters.length) {
+      const p = document.createElement('p');
+      p.className = 'chap-empty';
+      p.textContent = '幕の区切りはまだありません。timeline.json を読み込むか、「いまの位置で幕を区切る」で追加できます。';
+      list.appendChild(p);
+      return;
+    }
+    const cur = chapterAt(video.currentTime || 0);
+    state.chapters.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chap' + (c === cur ? ' current' : '');
+      b.innerHTML = `<span class="chap-no">${i + 1}</span><span class="chap-name">${esc(c.label)}</span><span class="chap-time">${fmtClock(c.t0)}</span>` +
+        (c.manual ? '<span class="chap-del" data-del="1" title="この区切りを消す" aria-label="この区切りを消す">×</span>' : '');
+      b.addEventListener('click', (e) => {
+        if (e.target.dataset.del) {
+          state.chapters.splice(i, 1);
+          persist(); renderAll();
+          return;
+        }
+        jumpTo(c.t0 + 0.01);
+      });
+      list.appendChild(b);
+    });
+  }
+
+  els.addChapterBtn.addEventListener('click', () => {
+    if (!state.duration) return;
+    const t = Math.round(video.currentTime * 100) / 100;
+    if (state.chapters.some((c) => Math.abs(c.t0 - t) < 0.5)) { toast('この位置にはもう区切りがあります'); return; }
+    const s = sentAt(t);
+    state.chapters.push({ label: s ? clip(s.text, 14) : `${fmtClock(t)} から`, t0: t, manual: true });
+    state.chapters.sort((a, b) => a.t0 - b.t0);
+    persist(); renderAll();
+    toast(`${fmtJa(t)} で幕を区切りました`);
+  });
+
+  // ---------- seek bar ----------
+  let dragging = false;
+  function seekFromEvent(e) {
+    const r = els.seek.getBoundingClientRect();
+    const x = Math.min(Math.max(e.clientX - r.left, 0), r.width);
+    video.currentTime = (x / r.width) * state.duration;
+    updateTransport();
+  }
+  els.seek.addEventListener('pointerdown', (e) => {
+    if (!state.duration) return;
+    dragging = true;
+    els.seek.setPointerCapture(e.pointerId);
+    seekFromEvent(e);
+  });
+  els.seek.addEventListener('pointermove', (e) => { if (dragging) seekFromEvent(e); });
+  els.seek.addEventListener('pointerup', () => { dragging = false; });
+  els.seek.addEventListener('pointercancel', () => { dragging = false; });
+
+  // ---------- comment drafting (声 → テキスト) ----------
+  const draft = { open: false, t: 0, thumb: '', heard: false };
+  let rec = null;
+  let silenceTimer = 0;
+
+  function captureFrame(maxSide, el = video) {
+    try {
+      const w = el.videoWidth, h = el.videoHeight;
+      if (!w || !h) return null;
+      const s = Math.min(1, maxSide / Math.max(w, h));
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * s);
+      c.height = Math.round(h * s);
+      c.getContext('2d').drawImage(el, 0, 0, c.width, c.height);
+      return c;
+    } catch { return null; }
+  }
+  const toThumb = (c) => { try { return c ? c.toDataURL('image/jpeg', 0.6) : ''; } catch { return ''; } };
+  const captureThumb = () => toThumb(captureFrame(240));
+
+  // 画面の書き出し用に、見えない2台目のプレイヤーを使う（再生中の動画を動かさない）
+  const grabber = document.createElement('video');
+  grabber.muted = true;
+  grabber.preload = 'auto';
+  grabber.playsInline = true;
+  let grabChain = Promise.resolve();
+  function grabOnce(t, maxSide) {
+    return new Promise((resolve) => {
+      if (!grabber.getAttribute('src')) { resolve(null); return; }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        grabber.removeEventListener('seeked', finish);
+        resolve(captureFrame(maxSide, grabber));
+      };
+      const go = () => {
+        grabber.addEventListener('seeked', finish);
+        setTimeout(finish, 3000);
+        grabber.currentTime = Math.min(Math.max(0, t), grabber.duration || t);
+      };
+      if (grabber.readyState >= 1) go();
+      else grabber.addEventListener('loadedmetadata', go, { once: true });
+    });
+  }
+  function grabAt(t, maxSide) {
+    const p = grabChain.then(() => grabOnce(t, maxSide));
+    grabChain = p.catch(() => {});
+    return p;
+  }
+  // review.json から読んだコメントなど、サムネイルがないものをあとから埋める
+  async function fillMissingThumbs() {
+    if (!state.url) return;
+    let changed = false;
+    for (const c of state.comments.filter((x) => !x.thumb)) {
+      c.thumb = toThumb(await grabAt(c.t, 240));
+      if (!c.thumb) continue;
+      changed = true;
+      const box = els.commentList.querySelector(`[data-id="${c.id}"] .c-thumb`);
+      if (box && !box.querySelector('img')) box.insertAdjacentHTML('afterbegin', `<img src="${c.thumb}" alt="">`);
+    }
+    if (changed) persist();
+  }
+
+  function setRec(mode, text) {
+    els.recState.className = 'rec-state' + (mode === 'listening' ? ' listening' : '');
+    els.recText.textContent = text;
+    els.micLabel.textContent = mode === 'listening' ? '聞き取りを止める' : (els.draftText.value.trim() ? '声で続きを話す' : '声で話す');
+    els.micBtn.hidden = !SR;
+  }
+
+  function beginComment() {
+    if (!state.duration) { toast('先に動画を開いてください'); return; }
+    if (draft.open) { commitComment(); return; }
+    video.pause();
+    draft.open = true;
+    draft.t = video.currentTime;
+    draft.thumb = captureThumb();
+    draft.heard = false;
+    const ctx = contextAt(draft.t);
+    els.draftTime.textContent = fmtJa(draft.t);
+    els.draftCtx.textContent = ctxLabel(ctx.chapter?.label, ctx.sent?.key, ctx.sent?.text);
+    els.draftText.value = '';
+    els.commentBtn.hidden = true;
+    els.dockHint.hidden = true;
+    els.composer.hidden = false;
+    els.screenBadge.hidden = false;
+    els.screenBadgeText.textContent = `${fmtClock(draft.t)} で一時停止 ・ コメント入力中`;
+    if (SR) startListening();
+    else {
+      setRec('idle', 'このブラウザは音声入力に未対応です。文字で入力してください（Chrome / Edge なら声で入力できます）');
+      els.draftText.focus();
+    }
+  }
+
+  function startListening() {
+    stopListening();
+    const prefix = els.draftText.value.trim();
+    let finalText = '';
+    const r = new SR();
+    r.lang = 'ja-JP';
+    r.continuous = true;
+    r.interimResults = true;
+    r.onresult = (e) => {
+      if (rec !== r) return;
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) finalText += res[0].transcript; else interim += res[0].transcript;
+      }
+      els.draftText.value = (prefix ? prefix + ' ' : '') + finalText + interim;
+      draft.heard = true;
+      setRec('listening', settings.autoCommit ? '聞き取り中… 話し終わると自動で保存します' : '聞き取り中… 終わったら Enter で保存');
+      clearTimeout(silenceTimer);
+      if (settings.autoCommit) silenceTimer = setTimeout(() => { if (rec === r && els.draftText.value.trim()) commitComment(); }, SILENCE_MS);
+    };
+    r.onerror = (e) => {
+      if (rec !== r) return;
+      const msg = {
+        'not-allowed': 'マイクが使えません。アドレスバーでマイクを許可するか、文字で入力してください',
+        'service-not-allowed': 'マイクが使えません。https か localhost で開くと声で入力できます',
+        'no-speech': '声が聞き取れませんでした。もう一度話すか、文字で入力してください',
+        'audio-capture': 'マイクが見つかりません。文字で入力してください',
+        'network': '音声認識の通信に失敗しました。文字で入力してください',
+      }[e.error];
+      if (msg) setRec('idle', msg);
+    };
+    r.onend = () => {
+      if (rec !== r) return;
+      rec = null;
+      clearTimeout(silenceTimer);
+      if (!draft.open) return;
+      if (settings.autoCommit && draft.heard && els.draftText.value.trim()) { commitComment(); return; }
+      if (els.recState.classList.contains('listening')) {
+        setRec('idle', draft.heard ? '聞き取りを止めました。文字を直して Enter で保存' : '声が聞き取れませんでした。もう一度話すか、文字で入力してください');
+      }
+    };
+    rec = r;
+    try {
+      r.start();
+      setRec('listening', '話してください…');
+    } catch {
+      rec = null;
+      setRec('idle', '音声入力を始められませんでした。文字で入力してください');
+      els.draftText.focus();
+    }
+  }
+  function stopListening() {
+    clearTimeout(silenceTimer);
+    const r = rec;
+    rec = null;
+    if (r) { try { r.abort(); } catch {} }
+  }
+
+  function commitComment() {
+    if (!draft.open) return;
+    const text = els.draftText.value.trim();
+    if (!text) {
+      toast('コメントが空です。話すか文字で入力してから保存してください');
+      els.draftText.focus();
+      return;
+    }
+    stopListening();
+    const ctx = contextAt(draft.t);
+    const c = {
+      id: uid(),
+      t: Math.round(draft.t * 100) / 100,
+      text,
+      done: false,
+      chapter: ctx.chapter?.label || '',
+      sentKey: ctx.sent?.key || '',
+      sentText: ctx.sent?.text || '',
+      thumb: draft.thumb,
+      createdAt: Date.now(),
+    };
+    state.comments.push(c);
+    sortComments();
+    persist();
+    closeComposer();
+    renderAll();
+    revealComment(c.id, true);
+    toast(`${fmtJa(c.t)} にコメントを保存しました`);
+    if (settings.autoResume) video.play().catch(() => {});
+  }
+
+  function closeComposer() {
+    stopListening();
+    draft.open = false;
+    els.composer.hidden = true;
+    els.commentBtn.hidden = false;
+    els.dockHint.hidden = false;
+    els.screenBadge.hidden = true;
+  }
+
+  els.commentBtn.addEventListener('click', beginComment);
+  els.saveBtn.addEventListener('click', commitComment);
+  els.cancelBtn.addEventListener('click', () => { closeComposer(); toast('入力をやめました'); });
+  els.micBtn.addEventListener('click', () => {
+    if (rec) { stopListening(); setRec('idle', '聞き取りを止めました。文字を直して Enter で保存'); }
+    else startListening();
+  });
+  // 文字を打ち始めたら聞き取りを止めて、勝手に保存されないようにする
+  els.draftText.addEventListener('input', (e) => {
+    if (rec && e.isTrusted && e.inputType !== 'insertReplacementText') {
+      stopListening();
+      setRec('idle', '文字で入力中です。Enter で保存');
+    }
+  });
+
+  // ---------- comment list ----------
+  function sortComments() { state.comments.sort((a, b) => a.t - b.t); }
+
+  function renderComments() {
+    const list = els.commentList;
+    list.textContent = '';
+    const total = state.comments.length;
+    const open = state.comments.filter((c) => !c.done).length;
+    els.counts.innerHTML = total ? `<b class="num">${total}</b>件 ・ 未対応 <b class="num">${open}</b>件` : '0件';
+    els.emptyState.hidden = total > 0;
+
+    state.comments.forEach((c, i) => {
+      if (state.filter === 'open' && c.done) return;
+      const li = document.createElement('li');
+      li.className = 'c-item' + (c.done ? ' is-done' : '');
+      li.dataset.id = c.id;
+      const ctx = [c.chapter, isScriptKey(c.sentKey) ? c.sentKey : ''].filter(Boolean).join(' ・ ');
+      li.innerHTML = `
+        <button class="c-thumb" type="button" data-act="jump" aria-label="${esc(fmtJa(c.t))}へ移動">
+          ${c.thumb ? `<img src="${c.thumb}" alt="">` : ''}
+          <span class="c-no">${i + 1}</span>
+        </button>
+        <div class="c-body">
+          <div class="c-meta">
+            <button class="time-chip" type="button" data-act="jump">${esc(fmtJa(c.t))}</button>
+            ${ctx ? `<span class="c-ctx">${esc(ctx)}</span>` : ''}
+          </div>
+          <p class="c-text" data-act="edit" title="クリックで書き直す">${esc(c.text)}</p>
+          ${c.sentText ? `<p class="c-line">台詞「${esc(clip(c.sentText, 40))}」</p>` : ''}
+          <div class="c-foot">
+            <label class="check"><input type="checkbox" data-act="done" ${c.done ? 'checked' : ''}> 対応済み</label>
+            <button class="del-btn" type="button" data-act="delete">削除</button>
+          </div>
+        </div>`;
+      list.appendChild(li);
+    });
+    if (state.filter === 'open' && total && !open) {
+      const li = document.createElement('li');
+      li.className = 'chap-empty';
+      li.textContent = '未対応のコメントはありません。';
+      list.appendChild(li);
+    }
+    els.promptPreview.textContent = buildPrompt();
+    const none = !total;
+    els.copyBtn.disabled = none;
+    els.saveJsonBtn.disabled = none;
+    els.saveZipBtn.disabled = none;
+  }
+
+  function revealComment(id, isNew) {
+    const li = els.commentList.querySelector(`[data-id="${id}"]`);
+    if (!li) return;
+    li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (isNew) li.classList.add('is-new');
+  }
+
+  els.commentList.addEventListener('click', (e) => {
+    const target = e.target.closest('[data-act]');
+    if (!target) return;
+    const li = target.closest('.c-item');
+    const c = state.comments.find((x) => x.id === li?.dataset.id);
+    if (!c) return;
+    const act = target.dataset.act;
+    if (act === 'jump') { jumpTo(c.t); }
+    else if (act === 'delete') {
+      const idx = state.comments.indexOf(c);
+      state.comments.splice(idx, 1);
+      persist(); renderAll();
+      toast('コメントを削除しました', { label: '元に戻す', run: () => { state.comments.splice(idx, 0, c); sortComments(); persist(); renderAll(); } });
+    }
+    else if (act === 'edit') { startEdit(target, c); }
+  });
+  els.commentList.addEventListener('change', (e) => {
+    if (e.target.dataset.act !== 'done') return;
+    const c = state.comments.find((x) => x.id === e.target.closest('.c-item')?.dataset.id);
+    if (!c) return;
+    c.done = e.target.checked;
+    persist(); renderAll();
+  });
+
+  function startEdit(p, c) {
+    const ta = document.createElement('textarea');
+    ta.className = 'c-edit';
+    ta.value = c.text;
+    p.replaceWith(ta);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const v = ta.value.trim();
+      if (save && v) { c.text = v; persist(); }
+      renderAll();
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    ta.addEventListener('blur', () => finish(true));
+  }
+
+  document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => {
+    state.filter = b.dataset.filter;
+    document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    renderComments();
+  }));
+
+  // ---------- AI handoff ----------
+  function buildPrompt(opts = {}) {
+    const frames = opts.frames || {};
+    const hasKeys = state.sents.some((s) => isScriptKey(s.key));
+    const items = state.comments.map((c, i) => ({ c, no: i + 1 })).filter((x) => !x.c.done);
+    const L = [];
+    L.push('# 動画の修正依頼', '');
+    L.push(`対象の動画: ${state.name || '（未選択）'}${state.duration ? `（長さ ${fmtClock(state.duration)}）` : ''}`);
+    if (state.dataName) L.push(`台本データ: ${state.dataName}`);
+    L.push('');
+    L.push('確認画面で動画を見ながら、気になった位置で止めて残したコメントです。');
+    L.push('それぞれの時刻の箇所を確認して、コメントの指示どおりに修正してください。');
+    L.push('');
+    L.push('進め方:');
+    if (hasKeys) L.push('- 「場所」の文キー（例: op1）は timeline.json の sents[].key です。台本（make_audio.py の CH）や render.py の同じキーから直してください。');
+    else L.push('- 動画ファイルそのものではなく、元のデータ（台本・テロップ・編集プロジェクト）を直してください。');
+    L.push('- 「ここ」「この文字」などは、その時刻に画面に映っているものを指します。' + (Object.keys(frames).length ? '番号ごとの画面の画像を frames/ に入れています。' : ''));
+    L.push('- 意図が読み取れない指示は、直す前に質問してください。');
+    L.push('- 直し終わったら、番号ごとに「どう直したか」を一覧で報告してください。');
+    L.push('');
+    L.push(`## 修正コメント（${items.length}件）`, '');
+    if (!items.length) L.push('（未対応のコメントはありません）');
+    for (const { c, no } of items) {
+      L.push(`${no}. [${fmtPrecise(c.t)}] ${c.text}`);
+      const where = ctxLabel(c.chapter, c.sentKey, c.sentText);
+      if (where) L.push(`   場所: ${where}`);
+      if (frames[c.id]) L.push(`   画面: ${frames[c.id]}`);
+    }
+    const doneCount = state.comments.length - items.length;
+    if (doneCount) L.push('', `※ 対応済みにしたコメント ${doneCount}件は省いています。`);
+    return L.join('\n');
+  }
+
+  function buildJson(frames = {}) {
+    return {
+      tool: '添削プレイヤー',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      howToUse: '各コメントの time（秒）の位置に映っている内容を、text の指示どおりに直す。status が "done" のものは対応済み。sentKey は timeline.json の sents[].key に対応する。',
+      video: { name: state.name, duration: Math.round(state.duration * 100) / 100, width: state.width || undefined, height: state.height || undefined },
+      scriptData: state.dataName || undefined,
+      chapters: state.chapters.map((c) => ({ label: c.label, start: c.t0 })),
+      comments: state.comments.map((c, i) => ({
+        no: i + 1,
+        time: c.t,
+        timecode: fmtPrecise(c.t),
+        text: c.text,
+        status: c.done ? 'done' : 'open',
+        chapter: c.chapter || undefined,
+        sentKey: isScriptKey(c.sentKey) ? c.sentKey : undefined,
+        sentText: c.sentText || undefined,
+        frame: frames[c.id],
+      })),
+    };
+  }
+
+  function download(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  }
+
+  els.copyBtn.addEventListener('click', async () => {
+    const text = buildPrompt();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch {}
+      ta.remove();
+      if (!ok) { els.promptPreview.closest('details').open = true; toast('コピーできませんでした。プレビューの文を選択してコピーしてください'); return; }
+    }
+    const n = state.comments.filter((c) => !c.done).length;
+    toast(`修正指示（${n}件）をコピーしました。AIに貼り付けてください`);
+  });
+
+  els.saveJsonBtn.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(buildJson(), null, 2)], { type: 'application/json' });
+    download(`${baseName(state.name)}_review.json`, blob);
+    toast('review.json を保存しました');
+  });
+
+  els.saveZipBtn.addEventListener('click', async () => {
+    if (!state.comments.length) return;
+    const btn = els.saveZipBtn;
+    const label = btn.textContent;
+    btn.disabled = true;
+    const enc = new TextEncoder();
+    const files = [];
+    const frames = {};
+    if (state.duration) {
+      for (let i = 0; i < state.comments.length; i++) {
+        const c = state.comments[i];
+        btn.textContent = `画面を書き出し中… ${i + 1}/${state.comments.length}`;
+        const canvas = await grabAt(c.t, 1280);
+        if (!canvas) continue;
+        const blob = await new Promise((r) => { try { canvas.toBlob(r, 'image/jpeg', 0.86); } catch { r(null); } });
+        if (!blob) continue;
+        const name = `frames/${pad2(i + 1)}_${fmtFile(c.t)}.jpg`;
+        frames[c.id] = name;
+        files.push({ name, data: new Uint8Array(await blob.arrayBuffer()) });
+      }
+    }
+    files.unshift(
+      { name: 'review.md', data: enc.encode(buildPrompt({ frames })) },
+      { name: 'review.json', data: enc.encode(JSON.stringify(buildJson(frames), null, 2)) },
+    );
+    download(`${baseName(state.name)}_review.zip`, makeZip(files));
+    btn.textContent = label;
+    btn.disabled = false;
+    toast(Object.keys(frames).length ? `画像 ${Object.keys(frames).length}枚つきで保存しました` : '動画が開かれていないので、画像なしで保存しました');
+  });
+
+  // 無圧縮 ZIP（外部ライブラリなしで書き出す）
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(u8) {
+    let c = 0xffffffff;
+    for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function makeZip(files) {
+    const enc = new TextEncoder();
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+    const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    const local = [];
+    const central = [];
+    let offset = 0;
+    let centralSize = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name);
+      const data = f.data;
+      const crc = crc32(data);
+      const lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true);
+      lh.setUint16(4, 20, true);
+      lh.setUint16(6, 0x0800, true);
+      lh.setUint16(8, 0, true);
+      lh.setUint16(10, dosTime, true);
+      lh.setUint16(12, dosDate, true);
+      lh.setUint32(14, crc, true);
+      lh.setUint32(18, data.length, true);
+      lh.setUint32(22, data.length, true);
+      lh.setUint16(26, name.length, true);
+      lh.setUint16(28, 0, true);
+      local.push(lh.buffer, name, data);
+      const ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true);
+      ch.setUint16(4, 20, true);
+      ch.setUint16(6, 20, true);
+      ch.setUint16(8, 0x0800, true);
+      ch.setUint16(10, 0, true);
+      ch.setUint16(12, dosTime, true);
+      ch.setUint16(14, dosDate, true);
+      ch.setUint32(16, crc, true);
+      ch.setUint32(20, data.length, true);
+      ch.setUint32(24, data.length, true);
+      ch.setUint16(28, name.length, true);
+      ch.setUint32(42, offset, true);
+      central.push(ch.buffer, name);
+      centralSize += 46 + name.length;
+      offset += 30 + name.length + data.length;
+    }
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, centralSize, true);
+    end.setUint32(16, offset, true);
+    return new Blob([...local, ...central, end.buffer], { type: 'application/zip' });
+  }
+
+  // ---------- data import (timeline.json / srt / vtt / review.json) ----------
+  function toSec(h, m, s, ms) { return (Number(h) || 0) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000; }
+  function parseSubs(text) {
+    const re = /(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{3})/;
+    const out = [];
+    for (const block of text.replace(/\r/g, '').split(/\n{2,}/)) {
+      const lines = block.split('\n');
+      const idx = lines.findIndex((l) => re.test(l));
+      if (idx < 0) continue;
+      const m = lines[idx].match(re);
+      const body = lines.slice(idx + 1).join(' ').replace(/<[^>]+>/g, '').trim();
+      if (!body) continue;
+      out.push({ key: '#' + (out.length + 1), text: body, t0: toSec(m[1], m[2], m[3], m[4]), t1: toSec(m[5], m[6], m[7], m[8]) });
+    }
+    return out;
+  }
+  function num(...vals) { for (const v of vals) if (typeof v === 'number' && isFinite(v)) return v; return null; }
+  function parseTimeline(obj) {
+    const rawCh = Array.isArray(obj) ? obj : (obj.chapters || obj.scenes || obj.acts || []);
+    const chapters = rawCh.map((c, i) => ({
+      label: String(c.label || c.title || c.name || c.chip || `幕${i + 1}`),
+      t0: num(c.t0, c.start, c.time, c.startTime),
+      manual: false,
+    })).filter((c) => c.t0 != null).sort((a, b) => a.t0 - b.t0);
+    const rawS = Array.isArray(obj) ? [] : (obj.sents || obj.sentences || obj.lines || []);
+    const sents = rawS.map((s, i) => ({
+      key: String(s.key || s.id || '#' + (i + 1)),
+      text: String(s.text || s.display || s.tts || ''),
+      t0: num(s.t0, s.start),
+      t1: num(s.t1, s.end),
+    })).filter((s) => s.t0 != null && s.t1 != null).sort((a, b) => a.t0 - b.t0);
+    return { chapters, sents };
+  }
+
+  function importReview(obj, fileName) {
+    let added = 0;
+    for (const raw of obj.comments) {
+      const t = num(raw.time, raw.t);
+      const text = String(raw.text || '').trim();
+      if (t == null || !text) continue;
+      if (state.comments.some((c) => Math.abs(c.t - t) < 0.05 && c.text === text)) continue;
+      state.comments.push({
+        id: uid(), t, text,
+        done: raw.status === 'done' || raw.done === true,
+        chapter: raw.chapter || '', sentKey: raw.sentKey || '', sentText: raw.sentText || '',
+        thumb: '', createdAt: Date.now(),
+      });
+      added++;
+    }
+    if (!state.chapters.length && Array.isArray(obj.chapters)) {
+      state.chapters = obj.chapters.map((c) => ({ label: String(c.label || ''), t0: num(c.start, c.t0) ?? 0, manual: false }));
+    }
+    sortComments();
+    toast(added ? `${fileName} からコメントを ${added}件読み込みました` : `${fileName} に新しいコメントはありませんでした`);
+  }
+
+  async function importDataFile(file) {
+    let text;
+    try { text = await file.text(); } catch { toast(`${file.name} を読めませんでした`); return; }
+    if (/\.(srt|vtt)$/i.test(file.name)) {
+      const sents = parseSubs(text);
+      if (!sents.length) { toast(`${file.name} に字幕が見つかりませんでした`); return; }
+      state.sents = sents;
+      state.dataName = file.name;
+      toast(`字幕を読み込みました（${sents.length}行）`);
+    } else {
+      let obj;
+      try { obj = JSON.parse(text); } catch { toast(`${file.name} は JSON として読めませんでした`); return; }
+      if (obj && Array.isArray(obj.comments)) {
+        importReview(obj, file.name);
+      } else {
+        const r = parseTimeline(obj || {});
+        if (!r.chapters.length && !r.sents.length) { toast(`${file.name} に幕や台詞のデータが見つかりませんでした`); return; }
+        if (r.chapters.length) state.chapters = r.chapters;
+        if (r.sents.length) state.sents = r.sents;
+        state.dataName = file.name;
+        toast(`${file.name} を読み込みました（幕 ${r.chapters.length} ・ 台詞 ${r.sents.length}）`);
+      }
+    }
+    if (!state.key) state.looseData = true;
+    // 先に付けたコメントにも、幕と台詞をあとから付ける
+    for (const c of state.comments) {
+      const ctx = contextAt(c.t);
+      if (!c.chapter && ctx.chapter) c.chapter = ctx.chapter.label;
+      if (!c.sentText && ctx.sent) { c.sentKey = ctx.sent.key; c.sentText = ctx.sent.text; }
+    }
+    lastNowKey = '';
+    persist();
+    renderAll();
+    fillMissingThumbs();
+  }
+
+  async function handleFiles(list) {
+    const files = [...list];
+    const vid = files.find(isVideoFile);
+    if (vid) openVideo(vid);
+    for (const f of files.filter(isDataFile)) await importDataFile(f);
+    if (!vid && !files.some(isDataFile)) toast('動画（MP4 など）か、timeline.json / .srt / review.json を選んでください');
+  }
+
+  els.videoInput.addEventListener('change', () => { handleFiles(els.videoInput.files); els.videoInput.value = ''; });
+  els.dataInput.addEventListener('change', () => { handleFiles(els.dataInput.files); els.dataInput.value = ''; });
+
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+  window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove('dragging');
+    if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files);
+  });
+
+  // ---------- controls ----------
+  els.playBtn.addEventListener('click', togglePlay);
+  video.addEventListener('click', togglePlay);
+  els.back5.addEventListener('click', () => seekBy(-5));
+  els.fwd5.addEventListener('click', () => seekBy(5));
+  els.frameBack.addEventListener('click', () => stepFrame(-1));
+  els.frameFwd.addEventListener('click', () => stepFrame(1));
+  els.autoCommit.checked = settings.autoCommit;
+  els.autoResume.checked = settings.autoResume;
+  els.autoCommit.addEventListener('change', () => { settings.autoCommit = els.autoCommit.checked; saveSettings(); });
+  els.autoResume.addEventListener('change', () => { settings.autoResume = els.autoResume.checked; saveSettings(); });
+
+  function neighborComment(dir) {
+    const t = video.currentTime;
+    const list = dir > 0 ? state.comments.filter((c) => c.t > t + 0.3) : state.comments.filter((c) => c.t < t - 0.3).reverse();
+    const c = list[0];
+    if (!c) { toast(dir > 0 ? 'この先にコメントはありません' : 'これより前にコメントはありません'); return; }
+    video.pause();
+    jumpTo(c.t);
+    revealComment(c.id);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const tag = e.target.tagName;
+    const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && e.target.type === 'text') || e.target.isContentEditable;
+    if (draft.open) {
+      if (e.key === 'Escape') { e.preventDefault(); closeComposer(); toast('入力をやめました'); return; }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); commitComment(); return; }
+      if (!typing && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); commitComment(); }
+      return;
+    }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    switch (e.key) {
+      case ' ': case 'k': case 'K': e.preventDefault(); togglePlay(); break;
+      case 'c': case 'C': e.preventDefault(); beginComment(); break;
+      case 'Enter': if (tag !== 'BUTTON' && tag !== 'SUMMARY' && tag !== 'LABEL') { e.preventDefault(); beginComment(); } break;
+      case 'ArrowLeft': case 'j': case 'J': e.preventDefault(); seekBy(-5); break;
+      case 'ArrowRight': case 'l': case 'L': e.preventDefault(); seekBy(5); break;
+      case ',': stepFrame(-1); break;
+      case '.': stepFrame(1); break;
+      case '[': neighborComment(-1); break;
+      case ']': neighborComment(1); break;
+      default:
+        if (/^[1-6]$/.test(e.key)) setSpeed(SPEEDS[Number(e.key) - 1]);
+    }
+  });
+
+  // ---------- render all ----------
+  function renderAll() {
+    const ready = !!state.duration;
+    els.commentBtn.disabled = !ready;
+    els.fileMeta.innerHTML = state.name
+      ? `<strong>${esc(state.name)}</strong>${state.duration ? ` ・ <span class="num">${fmtClock(state.duration)}</span>` : ''}${state.width ? ` ・ <span class="num">${state.width}×${state.height}</span>` : ''}${state.dataName ? ` ・ 台本 ${esc(state.dataName)}` : ''}`
+      : (state.dataName ? `台本 ${esc(state.dataName)} を読み込み済み ・ 動画が未選択です` : '動画が未選択です');
+    renderSpeeds();
+    renderMarks();
+    renderChapterList();
+    renderComments();
+    lastNowKey = '';
+    updateTransport();
+  }
+
+  setRec('idle', '');
+  renderAll();
+})();
+</script>
+</body>
+</html>
