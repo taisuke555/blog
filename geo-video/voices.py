@@ -5,6 +5,9 @@ usage:
   python voices.py mine                         # 自分の「My Voices」一覧
   python voices.py search [キーワード]           # ボイスライブラリから日本語の声を検索（既定: news）
   python voices.py sample VOICE_ID [VOICE_ID…]  # 各声で冒頭2文を生成 → $GEO_WORK/voice_samples/*.mp3
+  python voices.py audition [人数]              # 男性・日本語のニュース/ナレーション向けの声を探し、候補を自動で聴き比べ用に生成
+
+性別は ELEVENLABS_GENDER（既定 male）で絞り込む。
 
 ライブラリの声が API で使えない場合は、ElevenLabs の画面で「My Voices」に追加してから使う。
 実在の人物（特定のアナウンサー等）の声を本人の同意なくクローンしないこと。
@@ -14,6 +17,7 @@ import os, sys, json, urllib.request, urllib.parse, subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 API = "https://api.elevenlabs.io/v1"
 KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+GENDER = os.environ.get("ELEVENLABS_GENDER", "male")   # ユーザー指定：男性の声
 
 
 def get(path, **params):
@@ -70,8 +74,26 @@ if __name__ == "__main__":
         show(get("/voices")["voices"])
     elif cmd == "search":
         q = sys.argv[2] if len(sys.argv) > 2 else "news"
-        show(get("/shared-voices", language="ja", search=q, page_size=30)["voices"])
+        show(get("/shared-voices", language="ja", gender=GENDER, search=q, page_size=30)["voices"])
     elif cmd == "sample":
         sample(sys.argv[2:])
+    elif cmd == "audition":
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 4
+        seen, picks = set(), []
+        for q in ["news", "narration", "documentary", "announcer"]:
+            for v in get("/shared-voices", language="ja", gender=GENDER, search=q, page_size=20)["voices"]:
+                if v["voice_id"] not in seen:
+                    seen.add(v["voice_id"])
+                    picks.append(v)
+        picks = picks[:n]
+        show(picks)
+        ok = []
+        for v in picks:
+            try:
+                sample([v["voice_id"]])
+                ok.append(v["voice_id"])
+            except Exception as e:  # ライブラリの声は My Voices への追加が必要な場合がある
+                print(f"  skip {v['voice_id']} ({v.get('name', '')}): {e}")
+        print("samples:", ok)
     else:
         print(__doc__)
