@@ -64,16 +64,33 @@ python render_suez.py --thumb            # サムネイル
 3. `render_suez.py` をコピーし、章ごとのシーン関数でカメラと図解パターンを並べる
    （時刻は `T("キー")`＝その文の開始、`Q("cue名")`＝効果音の位置。ナレーションの実測で自動同期）
 
-### ナレーションの声
+### ナレーションの声（ElevenLabs v4 / NHK風）
 
-既定は Open JTalk（無料・ローカル、ただし機械音声）。本番は環境変数で切り替え:
+既定は Open JTalk（無料・ローカル、ただし機械音声）。ElevenLabs の **Eleven v4**（`eleven_v4`）に切り替えられます。
 
 ```bash
-export VE_TTS=elevenlabs ELEVENLABS_API_KEY=... ELEVENLABS_VOICE_ID=...
-# または事前に収録した wav を使う: VE_TTS=wavdir VE_WAV_DIR=./voice（ファイル名は台本キー.wav）
+export VE_TTS=elevenlabs
+export ELEVENLABS_API_KEY=...        # 環境の設定（環境変数）に入れる。チャットには貼らない
+export ELEVENLABS_VOICE_ID=...       # python voices.py search news / sample <ID> で聴き比べて選ぶ
+export ELEVENLABS_PRESET=nhk         # nhk（既定）/ nhk_tag / natural
+./run_suez.sh                        # → output/suez_elevenlabs.mp4
 ```
 
-声を変えても、尺・字幕・映像のタイミングは自動で追従します（video-engine スキルと同じ設計）。
+| プリセット | 設定 | 狙い |
+|---|---|---|
+| `nhk`（既定） | Stability 1.0（揺れ最小）・Similarity 0.75・タグなし | ニュース読みのように平らで明瞭 |
+| `nhk_tag` | Stability 0.5 ＋ 各文の頭に `[calm, clear, measured delivery, like a public-broadcast news anchor]` | 落ち着いた抑揚をタグで指示 |
+| `natural` | Stability 0.5・タグなし | 声本来の表現 |
+
+- v4 の声の設定は Stability と Similarity だけ（Speed / Style / SSML は無し）。`language_code=ja` と `seed` を毎回付けています
+- 前後の文を `previous_text` / `next_text` で渡し、文をまたいだ抑揚をそろえます（未対応なら自動で外して再送）
+- ElevenLabs では表示文（漢字まじり）をそのまま読ませ、「km」「〜」「6日間」など割れやすい箇所だけ `scripts/*.py` の `TTS_TEXT["elevenlabs"]` で書き換えています
+- 同じ文・同じ設定は `work/*/tts_cache` から再利用するので、作り直しで課金は増えません
+- 実在のアナウンサーの声を本人の同意なくクローンしないこと。ライブラリの声か Voice Design で「標準語（東京アクセント）の落ち着いたニュース読み」の声を使います
+- `ELEVENLABS_DRY_RUN=1` で API を呼ばずに送信内容だけ確認できます
+
+収録済みの音声を使う場合は `VE_TTS=wavdir VE_WAV_DIR=./voice`（ファイル名は台本キー.wav）。
+どの声でも、尺・字幕・映像のタイミングは自動で追従します（video-engine スキルと同じ設計）。
 
 ## ファイル
 
@@ -82,7 +99,9 @@ export VE_TTS=elevenlabs ELEVENLABS_API_KEY=... ELEVENLABS_VOICE_ID=...
 | `geokit.py` | 図解パターンのライブラリ（カメラ、レイヤー、赤線、ピン、テロップ、地形、地球儀） |
 | `fetch_assets.py` | 実写素材の取得とメルカトル座標への変換、Sentinel-2 の色合わせ・モザイク |
 | `make_audio.py` | 台本 → TTS → 実測タイムライン → BGM（ダッキング）＋効果音 |
-| `tts_adapters.py` | 音声合成の切替層（openjtalk / elevenlabs / wavdir） |
+| `tts_adapters.py` | 音声合成の切替層（openjtalk / elevenlabs v4 / wavdir） |
+| `voices.py` | ElevenLabs の日本語の声を検索・聴き比べ |
+| `run_suez.sh` | 依存導入 → 素材取得 → 音声 → レンダリングを一発実行 |
 | `render_suez.py` | 「スエズ運河」本編の演出 |
 | `render_reel.py` | 図解パターン集の演出 |
 | `scripts/` | 台本 |

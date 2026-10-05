@@ -1,0 +1,8 @@
+numpy
+scipy
+pillow
+skia-python
+pyopenjtalk-plus
+rasterio
+pyproj
+mgrs

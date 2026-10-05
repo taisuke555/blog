@@ -34,15 +34,38 @@ def trim(w, th=0.011, pad=int(0.06 * SR)):
     return w[max(0, idx[0] - pad):min(len(w), idx[-1] + pad)]
 
 
+ENGINE = os.environ.get("VE_TTS", "openjtalk").lower()
+# 読み上げ文：Open JTalk はひらがな寄せの tts 列、ElevenLabs は自然な表示文＋エンジン別の上書き
+OVERRIDE = getattr(S, "TTS_TEXT", {}).get(ENGINE, {})
+LINES = []
+for _chip, _label, _lines in S.CH:
+    for key, tts_text, disp in _lines:
+        if ENGINE == "elevenlabs":
+            text = OVERRIDE.get(key, disp or tts_text)
+        else:
+            text = OVERRIDE.get(key, tts_text)
+        LINES.append((key, text))
+SPOKEN = dict(LINES)
+ORDER = [k for k, _ in LINES]
+
+
 def synth(key, text):
-    """同じ文の再合成はキャッシュから（ElevenLabs 等の課金対策）"""
-    p = os.path.join(CACHE, f"{os.environ.get('VE_TTS', 'openjtalk')}_{key}.npy")
+    """同じ文・同じ設定の再合成はキャッシュから（ElevenLabs 等の課金対策）"""
+    i = ORDER.index(key)
+    prev_text = SPOKEN[ORDER[i - 1]] if i > 0 else None
+    next_text = SPOKEN[ORDER[i + 1]] if i + 1 < len(ORDER) else None
+    sig = json.dumps({"text": text, "voice": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+                      "model": os.environ.get("ELEVENLABS_MODEL", ""), "preset": os.environ.get("ELEVENLABS_PRESET", ""),
+                      "stab": os.environ.get("ELEVENLABS_STABILITY", ""), "prefix": os.environ.get("ELEVENLABS_PREFIX", ""),
+                      "ctx": [prev_text, next_text] if ENGINE == "elevenlabs" else None}, ensure_ascii=False)
+    p = os.path.join(CACHE, f"{ENGINE}_{key}.npy")
     meta = p + ".txt"
-    if os.path.exists(p) and open(meta).read() == text:
+    if os.path.exists(p) and os.path.exists(meta) and open(meta).read() == sig:
         return np.load(p)
-    w = trim(TTS.synth(text, key=key))
-    np.save(p, w)
-    open(meta, "w").write(text)
+    w = trim(TTS.synth(text, key=key, prev_text=prev_text, next_text=next_text))
+    if os.environ.get("ELEVENLABS_DRY_RUN") != "1":
+        np.save(p, w)
+        open(meta, "w").write(sig)
     return w
 
 
@@ -53,7 +76,7 @@ chapters, sents = [], []
 for ci, (chip, label, lines) in enumerate(S.CH):
     ch_t0 = t
     for key, tts_text, disp in lines:
-        w = synth(key, tts_text)
+        w = synth(key, SPOKEN[key])
         pad_n = int(t * SR) - len(voice)
         if pad_n > 0:
             voice = np.concatenate([voice, np.zeros(pad_n)])
